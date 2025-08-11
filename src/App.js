@@ -9,50 +9,67 @@ import { createClient } from '@supabase/supabase-js';
 import axios from 'axios';
 import Dashboard from './Dashboard';
 import AdminPanel from './AdminPanel';
-import Relatorios from './Relatorios';
 
-// URL e chave pública do seu projeto Supabase
-const SUPABASE_URL = 'https://bylupnogyoedaitandav.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5bHVwbm9neW9lZGFpdGFuZGF2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MzgwOTQzOSwiZXhwIjoyMDY5Mzg1NDM5fQ.r9K_kzXWBrx6bXYHpkxNB_RD9YzGe9W-CyQIxxur0fQ';
+// Preferir env vars no Render; manter fallback para desenvolvimento local
+const SUPABASE_URL =
+  process.env.REACT_APP_SUPABASE_URL || 'https://bylupnogyoedaitandav.supabase.co';
+const SUPABASE_ANON_KEY =
+  process.env.REACT_APP_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ5bHVwbm9neW9lZGFpdGFuZGF2Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MzgwOTQzOSwiZXhwIjoyMDY5Mzg1NDM5fQ.r9K_kzXWBrx6bXYHpkxNB_RD9YzGe9W-CyQIxxur0fQ';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 function App() {
+  // Login
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [session, setSession] = useState(null);
   const [error, setError] = useState('');
+
+  // Solicitar acesso
   const [requestOpen, setRequestOpen] = useState(false);
   const [requestName, setRequestName] = useState('');
   const [requestEmail, setRequestEmail] = useState('');
   const [requestFeedback, setRequestFeedback] = useState('');
+
+  // Admin
   const [showAdmin, setShowAdmin] = useState(false);
   const [userRole, setUserRole] = useState('');
-  const [currentPage, setCurrentPage] = useState('dashboard');
 
+  // Ao carregar, tentar restaurar sessão e setar Authorization nos requests
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    const init = async () => {
+      const { data } = await supabase.auth.getSession();
       if (data.session) {
         setSession(data.session);
         axios.defaults.headers.common['Authorization'] = 'Bearer ' + data.session.access_token;
       }
-    });
+    };
+    init();
   }, []);
 
+  // Buscar role do usuário sempre que tiver sessão
   useEffect(() => {
     if (!session) return;
-    axios.get('/user_info', {
-      headers: { Authorization: `Bearer ${session.access_token}` }
-    })
-    .then(res => setUserRole(res.data.role))
-    .catch(() => setUserRole(''));
+    axios
+      .get('/user_info', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      })
+      .then((res) => setUserRole(res.data.role))
+      .catch(() => setUserRole(''));
   }, [session]);
 
   const handleLogin = async () => {
     setError('');
-    const { data, error: loginError } = await supabase.auth.signInWithPassword({ email, password });
-    if (loginError) setError(loginError.message);
-    else if (data.session) {
+    const { data, error: loginError } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+    if (loginError) {
+      setError(loginError.message);
+      return;
+    }
+    if (data.session) {
       setSession(data.session);
       axios.defaults.headers.common['Authorization'] = 'Bearer ' + data.session.access_token;
     }
@@ -62,36 +79,39 @@ function App() {
     await supabase.auth.signOut();
     setSession(null);
     setUserRole('');
-    setCurrentPage('dashboard');
     delete axios.defaults.headers.common['Authorization'];
     setEmail('');
     setPassword('');
     setError('');
+    setShowAdmin(false);
   };
 
   const handleSolicitarAcesso = async () => {
     if (!requestName.trim() || !requestEmail.trim()) {
-      setRequestFeedback("Preencha todos os campos.");
+      setRequestFeedback('Preencha todos os campos.');
       return;
     }
-    setRequestFeedback("Enviando...");
+    setRequestFeedback('Enviando...');
     try {
       const res = await axios.post('/request_access', {
         name: requestName,
-        email: requestEmail
+        email: requestEmail,
       });
-      if (res.data.status === "pending") {
-        setRequestFeedback("Solicitação enviada! Aguarde aprovação.");
+      if (res.data?.status === 'pending') {
+        setRequestFeedback('Solicitação enviada! Aguarde aprovação.');
         setRequestName('');
         setRequestEmail('');
       } else {
-        setRequestFeedback(res.data.error || "Erro desconhecido.");
+        setRequestFeedback(res.data?.error || 'Erro desconhecido.');
       }
     } catch (err) {
-      setRequestFeedback("Erro ao enviar solicitação: " + (err.response?.data?.error || err.message));
+      setRequestFeedback(
+        'Erro ao enviar solicitação: ' + (err.response?.data?.error || err.message)
+      );
     }
   };
 
+  // ----------- TELA DE LOGIN -----------
   if (!session) {
     return (
       <Box
@@ -120,11 +140,12 @@ function App() {
           <Box sx={{ mb: 2, textAlign: 'center' }}>
             <img src="/serges_logo.png" alt="Serges" style={{ maxWidth: '200px' }} />
           </Box>
+
           <TextField
             label="Email"
             type="email"
             value={email}
-            onChange={e => setEmail(e.target.value)}
+            onChange={(e) => setEmail(e.target.value)}
             sx={{ mb: 2, width: '100%' }}
             InputLabelProps={{ style: { color: '#fffdf8' } }}
             InputProps={{ style: { color: '#fffdf8' } }}
@@ -133,23 +154,28 @@ function App() {
             label="Senha"
             type="password"
             value={password}
-            onChange={e => setPassword(e.target.value)}
+            onChange={(e) => setPassword(e.target.value)}
             sx={{ mb: 2, width: '100%' }}
             InputLabelProps={{ style: { color: '#fffdf8' } }}
             InputProps={{ style: { color: '#fffdf8' } }}
           />
-          {error && <Typography color="error" mb={1}>{error}</Typography>}
-          <Button variant="contained" fullWidth onClick={handleLogin}>Entrar</Button>
-          <Button
-            variant="outlined"
-            fullWidth
-            sx={{ mt: 2 }}
-            onClick={() => setRequestOpen(true)}
-          >
+
+          {error && (
+            <Typography color="error" mb={1}>
+              {error}
+            </Typography>
+          )}
+
+          <Button variant="contained" fullWidth onClick={handleLogin}>
+            Entrar
+          </Button>
+
+          <Button variant="outlined" fullWidth sx={{ mt: 2 }} onClick={() => setRequestOpen(true)}>
             Solicitar acesso
           </Button>
         </Box>
 
+        {/* Modal Solicitar acesso */}
         <Dialog open={requestOpen} onClose={() => setRequestOpen(false)}>
           <DialogTitle>Solicitar acesso</DialogTitle>
           <DialogContent>
@@ -158,14 +184,14 @@ function App() {
               fullWidth
               sx={{ mt: 1 }}
               value={requestName}
-              onChange={e => setRequestName(e.target.value)}
+              onChange={(e) => setRequestName(e.target.value)}
             />
             <TextField
               label="E-mail"
               fullWidth
               sx={{ mt: 2 }}
               value={requestEmail}
-              onChange={e => setRequestEmail(e.target.value)}
+              onChange={(e) => setRequestEmail(e.target.value)}
             />
             {requestFeedback && (
               <Typography sx={{ mt: 2, color: 'green' }}>{requestFeedback}</Typography>
@@ -182,28 +208,32 @@ function App() {
     );
   }
 
+  // ----------- APP PRINCIPAL -----------
   return (
     <Box display="flex" flexDirection="column" width="100vw" height="100vh">
-      <AppBar position="static" color="transparent" elevation={0}
+      <AppBar
+        position="static"
+        color="transparent"
+        elevation={0}
         sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}
       >
-        <Toolbar sx={{ px: 2 }}>
+        <Toolbar sx={{ px: 2, display: 'flex', alignItems: 'center' }}>
           <Box sx={{ flex: 1 }}>
             <img src="/serges_icon.png" alt="Serges" style={{ height: 28 }} />
           </Box>
+
           <Typography variant="h6" fontWeight="bold" sx={{ flex: 1, textAlign: 'center' }}>
-            {currentPage === 'relatorios'
-              ? 'Relatórios Personalizados'
-              : 'Relatório Analítico FOPAM'}
+            Relatório Analítico FOPAM
           </Typography>
+
           <Box sx={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
             {userRole === 'admin' && (
               <Button
-                variant={showAdmin ? "contained" : "outlined"}
+                variant={showAdmin ? 'contained' : 'outlined'}
                 color="primary"
-                onClick={() => setShowAdmin(prev => !prev)}
+                onClick={() => setShowAdmin((prev) => !prev)}
               >
-                {showAdmin ? "Voltar ao Dashboard" : "Administração"}
+                {showAdmin ? 'Voltar' : 'Administração'}
               </Button>
             )}
             <Button variant="outlined" color="error" onClick={handleLogout}>
@@ -216,10 +246,8 @@ function App() {
       <Box flex={1} overflow="auto">
         {showAdmin && userRole === 'admin' ? (
           <AdminPanel />
-        ) : currentPage === "dashboard" ? (
-          <Dashboard userEmail={session.user.email} onMenuChange={setCurrentPage} />
         ) : (
-          <Relatorios onMenuChange={setCurrentPage} />
+          <Dashboard userEmail={session.user.email} />
         )}
       </Box>
     </Box>

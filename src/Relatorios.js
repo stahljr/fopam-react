@@ -1,5 +1,4 @@
 // src/Relatorios.js
-
 import React, { useState, useEffect } from "react";
 import {
   Box,
@@ -8,12 +7,12 @@ import {
   TextField,
   Switch,
   FormControlLabel,
-  Checkbox,
   Table,
   TableHead,
   TableRow,
   TableCell,
   TableBody,
+  Checkbox,
   MenuItem,
   ListItemText,
 } from "@mui/material";
@@ -30,7 +29,7 @@ export default function Relatorios() {
   const [dados, setDados] = useState([]);
 
   useEffect(() => {
-    axios.get("/projetos").then(res => setProjetos(res.data || []));
+    axios.get("/projetos").then((res) => setProjetos(res.data || []));
   }, []);
 
   const handleGerarRelatorio = async () => {
@@ -78,24 +77,27 @@ export default function Relatorios() {
 
   return (
     <Box sx={{ p: 3 }}>
-      {/* filtros sem fundo extra */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+      {/* filtros */}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
         <TextField
           select
           label="Projetos"
           value={selectedProjetos}
-          onChange={e => setSelectedProjetos(e.target.value)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setSelectedProjetos(typeof v === "string" ? v.split(",") : v);
+          }}
           SelectProps={{
             multiple: true,
-            renderValue: v => v.join(", "),
+            renderValue: (v) => (Array.isArray(v) ? v.join(", ") : ""),
           }}
           variant="outlined"
           size="small"
-          sx={{ minWidth: 200 }}
+          sx={{ minWidth: 260 }}
         >
-          {projetos.map(p => (
+          {projetos.map((p) => (
             <MenuItem key={p} value={p}>
-              <Checkbox checked={selectedProjetos.includes(p)} />
+              <Checkbox checked={selectedProjetos.indexOf(p) > -1} />
               <ListItemText primary={p} />
             </MenuItem>
           ))}
@@ -124,27 +126,23 @@ export default function Relatorios() {
           label="Data Inicial"
           type="date"
           value={dateIni}
-          onChange={e => setDateIni(e.target.value)}
+          onChange={(e) => setDateIni(e.target.value)}
           InputLabelProps={{ shrink: true }}
           size="small"
-          sx={{ minWidth: 150 }}
+          sx={{ minWidth: 160 }}
         />
         <TextField
           label="Data Final"
           type="date"
           value={dateFim}
-          onChange={e => setDateFim(e.target.value)}
+          onChange={(e) => setDateFim(e.target.value)}
           InputLabelProps={{ shrink: true }}
           size="small"
-          sx={{ minWidth: 150 }}
+          sx={{ minWidth: 160 }}
         />
 
-        <Button
-          variant="contained"
-          onClick={handleGerarRelatorio}
-          disabled={loading}
-        >
-          Gerar Relatório
+        <Button variant="contained" onClick={handleGerarRelatorio} disabled={loading}>
+          {loading ? "Gerando..." : "Gerar Relatório"}
         </Button>
         <Button
           variant="outlined"
@@ -202,5 +200,5 @@ export default function Relatorios() {
         )}
       </Box>
     </Box>
-);
+  );
 }

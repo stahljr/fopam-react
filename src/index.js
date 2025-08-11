@@ -1,3 +1,5 @@
+// src/index.js
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
@@ -5,36 +7,24 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import axios from 'axios';
 
+// Base URL da API: em produção (Render) use REACT_APP_API_URL; em dev cai no localhost:5000
+axios.defaults.baseURL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
-// Em DEV usa localhost; em PROD usa variável de ambiente do Render
-axios.defaults.baseURL =
-  process.env.REACT_APP_API_URL || 'http://localhost:5000';
-
-// Tema personalizado utilizando a paleta da Serges
-// Agora em modo claro para que o dashboard tenha fundo claro e texto escuro.
+// Tema personalizado utilizando a paleta da Serges (modo claro)
 const theme = createTheme({
   palette: {
     mode: 'light',
-    primary: {
-      main: '#1f42e0',
-    },
-    secondary: {
-      main: '#143d94',
-    },
+    primary: { main: '#1f42e0' },
+    secondary: { main: '#143d94' },
     background: {
-      // Área geral do aplicativo (dashboard) em tom claro creme
-      default: '#fffdf8',
-      // Papel (cards, tabelas) em tom muito claro
-      paper: '#f5faff',
+      default: '#fffdf8', // área geral
+      paper: '#f5faff',   // cards/tabelas
     },
     text: {
-      // Textos em tom escuro para melhor contraste no fundo claro
       primary: '#0a2648',
       secondary: '#143d94',
     },
-    success: {
-      main: '#28a745',
-    },
+    success: { main: '#28a745' },
   },
 });
 

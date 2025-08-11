@@ -28,6 +28,7 @@ import {
   Avatar,
   Switch,
 } from '@mui/material';
+import Alert from '@mui/material/Alert';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -71,10 +72,33 @@ export default function Dashboard({ userEmail }) {
   const [autoCalcPay, setAutoCalcPay] = useState(true);
   const [autoCalcBill, setAutoCalcBill] = useState(true);
 
-  // abas de menu FOPAM
-  const [openFopamMenu, setOpenFopamMenu] = useState(false);
+  // menu lateral (ano/meses)
   const [openYearMenu, setOpenYearMenu] = useState(false);
   const [openMesesMenu, setOpenMesesMenu] = useState(false);
+
+  // status da API (Render)
+  const [apiOk, setApiOk] = useState(true);
+
+  // ping simples pra checar conectividade com o backend no Render
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await axios.get('/health', { timeout: 8000 });
+        if (!cancelled) setApiOk(true);
+      } catch {
+        if (!cancelled) setApiOk(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // seleciona o primeiro mês por padrão ao abrir
+  useEffect(() => {
+    if (!selectedMonth && monthsList.length) {
+      setSelectedMonth(monthsList[0].value);
+    }
+  }, [selectedMonth]);
 
   // monta hierarquia (datas > projetos > profissionais)
   const buildHierarchy = (raw) => {
@@ -458,6 +482,12 @@ export default function Dashboard({ userEmail }) {
       </Drawer>
 
       <Box sx={{ flexGrow: 1, p: 2 }}>
+        {!apiOk && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            Não consegui falar com a API. Verifique se o backend no Render está online e a variável REACT_APP_API_URL está correta.
+          </Alert>
+        )}
+
         {painelAtivo === 'fopam' ? (
           <>
             <Typography variant="h5" gutterBottom>
@@ -530,12 +560,12 @@ export default function Dashboard({ userEmail }) {
                                   >
                                     Dia {dia} — ({projCount} projetos) — Horas: {totHoras.toLocaleString(
                                       'pt-BR'
-                                    )} — Pag:{' '}
+                                    )} — Pag{' '}
                                     {totPag.toLocaleString('pt-BR', {
                                       style: 'currency',
                                       currency: 'BRL',
                                     })}{' '}
-                                    — Fat:{' '}
+                                    — Fat{' '}
                                     {totFat.toLocaleString('pt-BR', {
                                       style: 'currency',
                                       currency: 'BRL',
@@ -581,13 +611,13 @@ export default function Dashboard({ userEmail }) {
                                             fontWeight="bold"
                                             sx={{ display: 'flex', alignItems: 'center' }}
                                           >
-                                            {projKey || '(Sem projeto)'} — ({projItem.count} profissionais) — Horas:{' '}
-                                            {totH.toLocaleString('pt-BR')} — Pag:{' '}
+                                            {projKey || '(Sem projeto)'} — ({projItem.count} profissionais) — Horas{' '}
+                                            {totH.toLocaleString('pt-BR')} — Pag{' '}
                                             {totP.toLocaleString('pt-BR', {
                                               style: 'currency',
                                               currency: 'BRL',
                                             })}{' '}
-                                            — Fat:{' '}
+                                            — Fat{' '}
                                             {totF.toLocaleString('pt-BR', {
                                               style: 'currency',
                                               currency: 'BRL',
@@ -688,8 +718,8 @@ export default function Dashboard({ userEmail }) {
                 </Paper>
                 <Box sx={{ mt: 2 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                    TOTAL — Horas: {totals.horas} | Pagamento:{' '}
-                    {totals.pagamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} | Faturamento:{' '}
+                    TOTAL — Horas: {totals.horas} | Pagamento{' '}
+                    {totals.pagamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} | Faturamento{' '}
                     {totals.faturamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </Typography>
                 </Box>
