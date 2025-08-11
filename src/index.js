@@ -3,6 +3,12 @@ import ReactDOM from 'react-dom/client';
 import App from './App';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
+import axios from 'axios';
+
+
+// Em DEV usa localhost; em PROD usa variável de ambiente do Render
+axios.defaults.baseURL =
+  process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
 // Tema personalizado utilizando a paleta da Serges
 // Agora em modo claro para que o dashboard tenha fundo claro e texto escuro.
