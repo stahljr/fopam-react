@@ -1,6 +1,5 @@
 // src/Dashboard.js
-
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Relatorios from './Relatorios';
 import {
   Box,
@@ -27,6 +26,8 @@ import {
   Collapse,
   Avatar,
   Switch,
+  Tooltip,
+  LinearProgress,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import EditIcon from '@mui/icons-material/Edit';
@@ -34,13 +35,18 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ExpandMoreIcon from '@mui/icons-material/KeyboardArrowRight';
 import ExpandLessIcon from '@mui/icons-material/KeyboardArrowDown';
+import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
+import ClearIcon from '@mui/icons-material/Clear';
 import axios from 'axios';
 
 // Largura fixa da barra lateral
 const drawerWidth = 240;
 
 // Meses do menu lateral
-const monthsList = [{ value: '2025-08', label: 'Agosto 2025' }];
+const monthsList = [
+  { value: '2025-08', label: 'Agosto 2025' },
+  { value: '2025-07', label: 'Julho 2025' },
+];
 
 export default function Dashboard({ userEmail, userName }) {
   // controla qual painel interno mostrar: "fopam" ou "relatorios"
@@ -67,14 +73,50 @@ export default function Dashboard({ userEmail, userName }) {
   const [dialogRatePay, setDialogRatePay] = useState(0);
   const [dialogRateBill, setDialogRateBill] = useState(0);
 
-  // AGORA: autocálculo vem DESLIGADO por padrão (permite digitar manualmente)
+  // autocálculo DESLIGADO por padrão
   const [autoCalcPay, setAutoCalcPay] = useState(false);
   const [autoCalcBill, setAutoCalcBill] = useState(false);
 
   // abas de menu FOPAM
-  const [openFopamMenu, setOpenFopamMenu] = useState(false);
   const [openYearMenu, setOpenYearMenu] = useState(false);
   const [openMesesMenu, setOpenMesesMenu] = useState(false);
+
+  // --- Perfil (nome + avatar) ---
+  const [profileOpen, setProfileOpen] = useState(false);
+  const [profileName, setProfileName] = useState(userName || '');
+  const [avatarUrl, setAvatarUrl] = useState(null);        // vindo do backend (se/tq)
+  const [avatarFile, setAvatarFile] = useState(null);      // arquivo selecionado
+  const [avatarPreview, setAvatarPreview] = useState(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    // sempre que o prop userName mudar, sincroniza
+    setProfileName(userName || '');
+  }, [userName]);
+
+  // opcional: tenta buscar avatar atual (se backend der suporte em /user_info)
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const r = await axios.get('/user_info');
+        // se o backend passar avatar_url, usa aqui:
+        if (mounted && r?.data?.avatar_url) {
+          setAvatarUrl(r.data.avatar_url);
+        }
+        // também atualiza nome caso venha mais novo do backend
+        if (mounted && r?.data?.name && !userName) {
+          setProfileName(r.data.name);
+        }
+      } catch {
+        // silencioso
+      }
+    })();
+    return () => { mounted = false; };
+  }, []); // uma vez
+
+  const displayName = (profileName && profileName.trim()) || userEmail || '';
 
   // monta hierarquia (datas > projetos > profissionais)
   const buildHierarchy = (raw) => {
@@ -236,7 +278,6 @@ export default function Dashboard({ userEmail, userName }) {
     setDialogFlags({ producao_validada: false, pagamento_lancado: false, faturamento_validado: false });
     setDialogRatePay(0);
     setDialogRateBill(0);
-    // switches OFF por padrão
     setAutoCalcPay(false);
     setAutoCalcBill(false);
     setDialogOpen(true);
@@ -271,7 +312,6 @@ export default function Dashboard({ userEmail, userName }) {
       pagamento_lancado: row.pagamento_lancado ?? false,
       faturamento_validado: row.faturamento_validado ?? false,
     });
-    // switches OFF por padrão
     setAutoCalcPay(false);
     setAutoCalcBill(false);
     setDialogOpen(true);
@@ -396,7 +436,65 @@ export default function Dashboard({ userEmail, userName }) {
     }
   };
 
-  const displayName = (userName && userName.trim()) || userEmail || '';
+  // --- Perfil: handlers ---
+  const handleOpenProfile = () => setProfileOpen(true);
+  const handleCloseProfile = () => {
+    setProfileOpen(false);
+    // limpa seleção de arquivo ao fechar
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const onPickAvatar = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+  };
+
+  const clearAvatarSelection = () => {
+    setAvatarFile(null);
+    setAvatarPreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleSaveProfile = async () => {
+    try {
+      setSavingProfile(true);
+
+      // 1) Atualiza nome (se mudou)
+      const trimmed = (profileName || '').trim();
+      if (trimmed && trimmed !== userName) {
+        await axios.post('/profile/update-name', { name: trimmed });
+      }
+
+      // 2) Sobe avatar (se selecionado)
+      if (avatarFile) {
+        const fd = new FormData();
+        fd.append('file', avatarFile);
+        const resp = await axios.post('/profile/upload-avatar', fd, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+        if (resp?.data?.avatar_url) {
+          setAvatarUrl(resp.data.avatar_url);
+        }
+      }
+
+      setSavingProfile(false);
+      handleCloseProfile();
+
+      // opcional: recarrega /user_info pra sincronizar (se App.js depender disso)
+      try { await axios.get('/user_info'); } catch {}
+
+    } catch (err) {
+      console.error('Erro ao salvar perfil:', err);
+      setSavingProfile(false);
+    }
+  };
+
+  // letra de fallback no avatar
+  const fallbackInitial = (displayName || ' ').trim().charAt(0).toUpperCase();
 
   return (
     <Box sx={{ display: 'flex' }}>
@@ -410,16 +508,34 @@ export default function Dashboard({ userEmail, userName }) {
       >
         <Box sx={{ p: 2 }}>
           <img src="/serges_logo.png" alt="Serges" style={{ maxWidth: '100%', height: 40, marginBottom: 8 }} />
-          {(userEmail || userName) && (
+
+          {(userEmail || profileName) && (
             <Box sx={{ display: 'flex', alignItems: 'center', flexDirection: 'column', mt: 1, textAlign: 'center' }}>
-              <Avatar sx={{ bgcolor: 'primary.main', width: 48, height: 48, mb: 1 }} />
+              <Tooltip title="Editar perfil">
+                <IconButton onClick={handleOpenProfile} sx={{ p: 0, mb: 1 }}>
+                  <Avatar
+                    src={avatarPreview || avatarUrl || undefined}
+                    alt={displayName}
+                    sx={{ bgcolor: 'primary.main', width: 48, height: 48 }}
+                  >
+                    {!avatarPreview && !avatarUrl ? fallbackInitial : null}
+                  </Avatar>
+                </IconButton>
+              </Tooltip>
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>Bem-vindo</Typography>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: 'text.primary', wordBreak: 'break-word' }}>
+              <Typography
+                variant="subtitle2"
+                sx={{ fontWeight: 'bold', color: 'text.primary', wordBreak: 'break-word' }}
+              >
                 {displayName}
               </Typography>
+              <Button size="small" onClick={handleOpenProfile} sx={{ mt: 0.5 }}>
+                Editar perfil
+              </Button>
             </Box>
           )}
         </Box>
+
         <List>
           <ListItemButton selected={painelAtivo === 'fopam'} onClick={() => setPainelAtivo('fopam')}>
             <ListItemText primary="FOPAM" />
@@ -665,6 +781,7 @@ export default function Dashboard({ userEmail, userName }) {
               <Typography variant="body1">Selecione um mês no menu ao lado para começar.</Typography>
             )}
 
+            {/* Dialog de novo/editar produção */}
             <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
               <DialogTitle>{dialogMode === 'new' ? 'Nova Produção' : 'Editar Produção'}</DialogTitle>
               <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
@@ -892,6 +1009,60 @@ export default function Dashboard({ userEmail, userName }) {
               <DialogActions>
                 <Button onClick={() => setDialogOpen(false)}>Cancelar</Button>
                 <Button onClick={handleSaveDialog} variant="contained">
+                  Salvar
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+            {/* Dialog de Perfil */}
+            <Dialog open={profileOpen} onClose={handleCloseProfile} maxWidth="sm" fullWidth>
+              <DialogTitle>Editar perfil</DialogTitle>
+              <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
+                <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', mb: 2 }}>
+                  <Avatar
+                    src={avatarPreview || avatarUrl || undefined}
+                    alt={displayName}
+                    sx={{ width: 72, height: 72, bgcolor: 'primary.main' }}
+                  >
+                    {!avatarPreview && !avatarUrl ? fallbackInitial : null}
+                  </Avatar>
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/*"
+                      hidden
+                      onChange={onPickAvatar}
+                    />
+                    <Button
+                      variant="outlined"
+                      startIcon={<PhotoCameraIcon />}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
+                      Escolher foto
+                    </Button>
+                    {avatarPreview && (
+                      <Tooltip title="Limpar seleção">
+                        <IconButton onClick={clearAvatarSelection}>
+                          <ClearIcon />
+                        </IconButton>
+                      </Tooltip>
+                    )}
+                  </Box>
+                </Box>
+
+                <TextField
+                  label="Nome de exibição"
+                  value={profileName}
+                  onChange={(e) => setProfileName(e.target.value)}
+                  fullWidth
+                />
+
+                {savingProfile && <Box sx={{ mt: 2 }}><LinearProgress /></Box>}
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={handleCloseProfile} disabled={savingProfile}>Cancelar</Button>
+                <Button onClick={handleSaveProfile} variant="contained" disabled={savingProfile}>
                   Salvar
                 </Button>
               </DialogActions>

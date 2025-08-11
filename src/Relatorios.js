@@ -1,12 +1,10 @@
 // src/Relatorios.js
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Box,
   Typography,
   Button,
   TextField,
-  Switch,
-  FormControlLabel,
   Table,
   TableHead,
   TableRow,
@@ -15,21 +13,40 @@ import {
   Checkbox,
   MenuItem,
   ListItemText,
+  FormControl,
+  FormLabel,
+  RadioGroup,
+  FormControlLabel,
+  Radio,
 } from "@mui/material";
 import axios from "axios";
 import FileDownloadIcon from "@mui/icons-material/FileDownload";
 
+const menuProps = {
+  PaperProps: { style: { maxHeight: 320 } },
+};
+
+function formatBRL(v) {
+  const n = Number(v);
+  if (!isFinite(n)) return "-";
+  return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+
 export default function Relatorios() {
   const [projetos, setProjetos] = useState([]);
   const [selectedProjetos, setSelectedProjetos] = useState([]);
-  const [tipoFiltroData, setTipoFiltroData] = useState("pagamento");
+  const [tipoFiltroData, setTipoFiltroData] = useState("pagamento"); // "pagamento" | "servico"
   const [dateIni, setDateIni] = useState("");
   const [dateFim, setDateFim] = useState("");
   const [loading, setLoading] = useState(false);
   const [dados, setDados] = useState([]);
 
   useEffect(() => {
-    axios.get("/projetos").then((res) => setProjetos(res.data || []));
+    // carrega TODOS os projetos existentes no Supabase (sem filtrar por mês)
+    axios.get("/projetos").then((res) => {
+      const arr = Array.isArray(res.data) ? res.data : [];
+      setProjetos(arr);
+    });
   }, []);
 
   const handleGerarRelatorio = async () => {
@@ -39,15 +56,16 @@ export default function Relatorios() {
         params: {
           projetos: selectedProjetos.join(","),
           tipo_data: tipoFiltroData,
-          data_ini: dateIni,
-          data_fim: dateFim,
+          data_ini: dateIni || undefined,
+          data_fim: dateFim || undefined,
         },
       });
       setDados(res.data || []);
     } catch {
       setDados([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleExportar = async () => {
@@ -56,8 +74,8 @@ export default function Relatorios() {
         params: {
           projetos: selectedProjetos.join(","),
           tipo_data: tipoFiltroData,
-          data_ini: dateIni,
-          data_fim: dateFim,
+          data_ini: dateIni || undefined,
+          data_fim: dateFim || undefined,
         },
         responseType: "blob",
       });
@@ -75,10 +93,39 @@ export default function Relatorios() {
     }
   };
 
+  const limparFiltros = () => {
+    setSelectedProjetos([]);
+    setTipoFiltroData("pagamento");
+    setDateIni("");
+    setDateFim("");
+    setDados([]);
+  };
+
+  // totais (opcional, útil pra conferência)
+  const totais = useMemo(() => {
+    const soma = (key) =>
+      dados.reduce((acc, r) => {
+        const n = Number(r?.[key]);
+        return acc + (isFinite(n) ? n : 0);
+      }, 0);
+    return {
+      pagamento: soma("pagamento"),
+      faturamento: soma("faturamento"),
+    };
+  }, [dados]);
+
   return (
     <Box sx={{ p: 3 }}>
       {/* filtros */}
-      <Box sx={{ display: "flex", alignItems: "center", gap: 2, flexWrap: "wrap" }}>
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: "minmax(260px, 1fr) auto auto auto auto auto",
+          gap: 2,
+          alignItems: "center",
+          mb: 2,
+        }}
+      >
         <TextField
           select
           label="Projetos"
@@ -90,6 +137,7 @@ export default function Relatorios() {
           SelectProps={{
             multiple: true,
             renderValue: (v) => (Array.isArray(v) ? v.join(", ") : ""),
+            MenuProps: menuProps,
           }}
           variant="outlined"
           size="small"
@@ -103,24 +151,19 @@ export default function Relatorios() {
           ))}
         </TextField>
 
-        <FormControlLabel
-          control={
-            <Switch
-              checked={tipoFiltroData === "pagamento"}
-              onChange={() => setTipoFiltroData("pagamento")}
-            />
-          }
-          label="Data de Pagamento"
-        />
-        <FormControlLabel
-          control={
-            <Switch
-              checked={tipoFiltroData === "servico"}
-              onChange={() => setTipoFiltroData("servico")}
-            />
-          }
-          label="Data de Serviço"
-        />
+        <FormControl component="fieldset" sx={{ ml: 1 }}>
+          <FormLabel component="legend" sx={{ mb: 0.5 }}>
+            Base da data
+          </FormLabel>
+          <RadioGroup
+            row
+            value={tipoFiltroData}
+            onChange={(e) => setTipoFiltroData(e.target.value)}
+          >
+            <FormControlLabel value="pagamento" control={<Radio />} label="Pagamento" />
+            <FormControlLabel value="servico" control={<Radio />} label="Serviço" />
+          </RadioGroup>
+        </FormControl>
 
         <TextField
           label="Data Inicial"
@@ -152,51 +195,59 @@ export default function Relatorios() {
         >
           Exportar
         </Button>
+        <Button color="inherit" onClick={limparFiltros}>
+          Limpar
+        </Button>
       </Box>
 
       {/* resultado */}
       <Box sx={{ mt: 3 }}>
         {dados.length === 0 ? (
-          <Typography>Nenhum dado encontrado.</Typography>
+          <Typography color="text.secondary">Nenhum dado encontrado.</Typography>
         ) : (
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Projeto</TableCell>
-                <TableCell>Profissional</TableCell>
-                <TableCell>Data Serviço</TableCell>
-                <TableCell>Data Pagamento</TableCell>
-                <TableCell align="right">Pagamento</TableCell>
-                <TableCell align="right">Faturamento</TableCell>
-                <TableCell>NF Serviço</TableCell>
-                <TableCell>NF Faturamento</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {dados.map((r, i) => (
-                <TableRow key={i}>
-                  <TableCell>{r.projeto}</TableCell>
-                  <TableCell>{r.profissional}</TableCell>
-                  <TableCell>{r.data_servico}</TableCell>
-                  <TableCell>{r.data_pagamento}</TableCell>
-                  <TableCell align="right">
-                    {parseFloat(r.pagamento).toLocaleString("pt-BR", {
-                      style: "currency",
-                      currency: "BRL",
-                    })}
-                  </TableCell>
-                  <TableCell align="right">
-                    {parseFloat(r.faturamento).toLocaleString("pt-BR", {
-                      style: "currency",
-                      currency: "BRL",
-                    })}
-                  </TableCell>
-                  <TableCell>{r.nf_servico}</TableCell>
-                  <TableCell>{r.nf_faturamento}</TableCell>
+          <>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Projeto</TableCell>
+                  <TableCell>Profissional</TableCell>
+                  <TableCell>Data Serviço</TableCell>
+                  <TableCell>Data Pagamento</TableCell>
+                  <TableCell align="right">Pagamento</TableCell>
+                  <TableCell align="right">Faturamento</TableCell>
+                  <TableCell>NF Serviço</TableCell>
+                  <TableCell>NF Faturamento</TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHead>
+              <TableBody>
+                {dados.map((r, i) => (
+                  <TableRow key={i}>
+                    <TableCell>{r.projeto}</TableCell>
+                    <TableCell>{r.profissional}</TableCell>
+                    <TableCell>{r.data_servico}</TableCell>
+                    <TableCell>{r.data_pagamento}</TableCell>
+                    <TableCell align="right">{formatBRL(r.pagamento)}</TableCell>
+                    <TableCell align="right">{formatBRL(r.faturamento)}</TableCell>
+                    <TableCell>{r.nf_servico || ""}</TableCell>
+                    <TableCell>{r.nf_faturamento || ""}</TableCell>
+                  </TableRow>
+                ))}
+                {/* Linha de totais */}
+                <TableRow>
+                  <TableCell colSpan={4} align="right" sx={{ fontWeight: "bold" }}>
+                    Totais:
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: "bold" }}>
+                    {formatBRL(totais.pagamento)}
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: "bold" }}>
+                    {formatBRL(totais.faturamento)}
+                  </TableCell>
+                  <TableCell colSpan={2} />
+                </TableRow>
+              </TableBody>
+            </Table>
+          </>
         )}
       </Box>
     </Box>
