@@ -28,7 +28,6 @@ import {
   Avatar,
   Switch,
 } from '@mui/material';
-import Alert from '@mui/material/Alert';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -41,11 +40,9 @@ import axios from 'axios';
 const drawerWidth = 240;
 
 // Meses do menu lateral
-const monthsList = [
-  { value: '2025-08', label: 'Agosto 2025' },
-];
+const monthsList = [{ value: '2025-08', label: 'Agosto 2025' }];
 
-export default function Dashboard({ userEmail }) {
+export default function Dashboard({ userEmail, userName }) {
   // controla qual painel interno mostrar: "fopam" ou "relatorios"
   const [painelAtivo, setPainelAtivo] = useState('fopam');
 
@@ -69,36 +66,15 @@ export default function Dashboard({ userEmail }) {
   });
   const [dialogRatePay, setDialogRatePay] = useState(0);
   const [dialogRateBill, setDialogRateBill] = useState(0);
-  const [autoCalcPay, setAutoCalcPay] = useState(true);
-  const [autoCalcBill, setAutoCalcBill] = useState(true);
 
-  // menu lateral (ano/meses)
+  // AGORA: autocálculo vem DESLIGADO por padrão (permite digitar manualmente)
+  const [autoCalcPay, setAutoCalcPay] = useState(false);
+  const [autoCalcBill, setAutoCalcBill] = useState(false);
+
+  // abas de menu FOPAM
+  const [openFopamMenu, setOpenFopamMenu] = useState(false);
   const [openYearMenu, setOpenYearMenu] = useState(false);
   const [openMesesMenu, setOpenMesesMenu] = useState(false);
-
-  // status da API (Render)
-  const [apiOk, setApiOk] = useState(true);
-
-  // ping simples pra checar conectividade com o backend no Render
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        await axios.get('/health', { timeout: 8000 });
-        if (!cancelled) setApiOk(true);
-      } catch {
-        if (!cancelled) setApiOk(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  // seleciona o primeiro mês por padrão ao abrir
-  useEffect(() => {
-    if (!selectedMonth && monthsList.length) {
-      setSelectedMonth(monthsList[0].value);
-    }
-  }, [selectedMonth]);
 
   // monta hierarquia (datas > projetos > profissionais)
   const buildHierarchy = (raw) => {
@@ -112,11 +88,13 @@ export default function Dashboard({ userEmail }) {
         datesMap[dateKey] = { projects: {}, totals: { horas: 0, pagamento: 0, faturamento: 0 }, projectCount: 0 };
       }
       const dateObj = datesMap[dateKey];
+
       if (!dateObj.projects[projectKey]) {
         dateObj.projects[projectKey] = { professionals: {}, totals: { horas: 0, pagamento: 0, faturamento: 0 }, count: 0 };
         dateObj.projectCount++;
       }
       const projObj = dateObj.projects[projectKey];
+
       if (!projObj.professionals[profKey]) {
         projObj.professionals[profKey] = {
           rows: [],
@@ -128,26 +106,34 @@ export default function Dashboard({ userEmail }) {
         projObj.count++;
       }
       const profObj = projObj.professionals[profKey];
+
       profObj.rows.push(row);
+
       const h = parseFloat(row.horas) || 0;
       const p = parseFloat(row.pagamento) || 0;
       const f = parseFloat(row.faturamento) || 0;
+
       profObj.totals.horas += h;
       profObj.totals.pagamento += p;
       profObj.totals.faturamento += f;
+
       profObj.producao_validada = profObj.producao_validada && !!row.producao_validada;
       profObj.pagamento_lancado = profObj.pagamento_lancado && !!row.pagamento_lancado;
       profObj.faturamento_validado = profObj.faturamento_validado && !!row.faturamento_validado;
+
       projObj.totals.horas += h;
       projObj.totals.pagamento += p;
       projObj.totals.faturamento += f;
+
       dateObj.totals.horas += h;
       dateObj.totals.pagamento += p;
       dateObj.totals.faturamento += f;
+
       globalTotals.horas += h;
       globalTotals.pagamento += p;
       globalTotals.faturamento += f;
     });
+
     const dateKeys = Object.keys(datesMap).sort((a, b) => new Date(a) - new Date(b));
     const datesList = dateKeys.map((dateKey) => {
       const dObj = datesMap[dateKey];
@@ -196,6 +182,7 @@ export default function Dashboard({ userEmail }) {
       const { datesList, globalTotals } = buildHierarchy(raw);
       setHierarchy(datesList);
       setTotals(globalTotals);
+
       const initDates = {};
       const initProjects = {};
       datesList.forEach((d) => {
@@ -216,10 +203,21 @@ export default function Dashboard({ userEmail }) {
   };
 
   useEffect(() => {
-    if (selectedMonth) {
-      fetchData(selectedMonth);
-    }
+    if (selectedMonth) fetchData(selectedMonth);
   }, [selectedMonth]);
+
+  // Helpers de recálculo quando switches forem ligados
+  const recalcPagamentos = (rows, rate) =>
+    rows.map((r) => {
+      const h = parseFloat(r.horas) || 0;
+      return { ...r, pagamento: parseFloat((h * rate).toFixed(2)) };
+    });
+
+  const recalcFaturamentos = (rows, rate) =>
+    rows.map((r) => {
+      const h = parseFloat(r.horas) || 0;
+      return { ...r, faturamento: parseFloat((h * rate).toFixed(2)) };
+    });
 
   // abrir diálogo novo
   const handleOpenNew = () => {
@@ -232,12 +230,15 @@ export default function Dashboard({ userEmail }) {
       data_pagamento: `${selectedMonth}-01`,
       mes: `${selectedMonth}-01`,
     });
-    setDialogRows([{ id: null, data_servico: `${selectedMonth}-01`, horas: 0, pagamento: 0, faturamento: 0 }]);
+    setDialogRows([
+      { id: null, data_servico: `${selectedMonth}-01`, horas: 0, pagamento: 0, faturamento: 0 },
+    ]);
     setDialogFlags({ producao_validada: false, pagamento_lancado: false, faturamento_validado: false });
     setDialogRatePay(0);
     setDialogRateBill(0);
-    setAutoCalcPay(true);
-    setAutoCalcBill(true);
+    // switches OFF por padrão
+    setAutoCalcPay(false);
+    setAutoCalcBill(false);
     setDialogOpen(true);
   };
 
@@ -270,8 +271,9 @@ export default function Dashboard({ userEmail }) {
       pagamento_lancado: row.pagamento_lancado ?? false,
       faturamento_validado: row.faturamento_validado ?? false,
     });
-    setAutoCalcPay(true);
-    setAutoCalcBill(true);
+    // switches OFF por padrão
+    setAutoCalcPay(false);
+    setAutoCalcBill(false);
     setDialogOpen(true);
   };
 
@@ -394,6 +396,8 @@ export default function Dashboard({ userEmail }) {
     }
   };
 
+  const displayName = (userName && userName.trim()) || userEmail || '';
+
   return (
     <Box sx={{ display: 'flex' }}>
       <Drawer
@@ -406,35 +410,35 @@ export default function Dashboard({ userEmail }) {
       >
         <Box sx={{ p: 2 }}>
           <img src="/serges_logo.png" alt="Serges" style={{ maxWidth: '100%', height: 40, marginBottom: 8 }} />
-          {userEmail && (
-            <Box sx={{ display: 'flex', alignItems: 'center', flexDirection: 'column', mt: 1 }}>
-              <Avatar sx={{ bgcolor: 'primary.main', width: 40, height: 40, mb: 1 }} />
+          {(userEmail || userName) && (
+            <Box sx={{ display: 'flex', alignItems: 'center', flexDirection: 'column', mt: 1, textAlign: 'center' }}>
+              <Avatar sx={{ bgcolor: 'primary.main', width: 48, height: 48, mb: 1 }} />
               <Typography variant="body2" sx={{ color: 'text.secondary' }}>Bem-vindo</Typography>
-              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: 'text.primary' }}>
-                {userEmail}
+              <Typography variant="subtitle2" sx={{ fontWeight: 'bold', color: 'text.primary', wordBreak: 'break-word' }}>
+                {displayName}
               </Typography>
             </Box>
           )}
         </Box>
         <List>
-          <ListItemButton
-            selected={painelAtivo === 'fopam'}
-            onClick={() => setPainelAtivo('fopam')}
-          >
+          <ListItemButton selected={painelAtivo === 'fopam'} onClick={() => setPainelAtivo('fopam')}>
             <ListItemText primary="FOPAM" />
           </ListItemButton>
+
           <Collapse in={painelAtivo === 'fopam'} timeout="auto" unmountOnExit>
             <List component="div" disablePadding>
               <ListItemButton sx={{ pl: 2 }} onClick={() => setOpenYearMenu((o) => !o)}>
                 <ListItemText primary="2025" />
                 {openYearMenu ? <ExpandLessIcon /> : <ExpandMoreIcon />}
               </ListItemButton>
+
               <Collapse in={openYearMenu} timeout="auto" unmountOnExit>
                 <List component="div" disablePadding>
                   <ListItemButton sx={{ pl: 4 }} onClick={() => setOpenMesesMenu((o) => !o)}>
                     <ListItemText primary="Meses" />
                     {openMesesMenu ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                   </ListItemButton>
+
                   <Collapse in={openMesesMenu} timeout="auto" unmountOnExit>
                     <List component="div" disablePadding>
                       {monthsList.map((month) => (
@@ -445,17 +449,10 @@ export default function Dashboard({ userEmail }) {
                             mx: 1,
                             my: 0.5,
                             borderRadius: 1,
-                            backgroundColor:
-                              selectedMonth === month.value ? 'primary.main' : 'transparent',
-                            color:
-                              selectedMonth === month.value
-                                ? 'primary.contrastText'
-                                : 'text.primary',
+                            backgroundColor: selectedMonth === month.value ? 'primary.main' : 'transparent',
+                            color: selectedMonth === month.value ? 'primary.contrastText' : 'text.primary',
                             '&:hover': {
-                              backgroundColor:
-                                selectedMonth === month.value
-                                  ? 'primary.main'
-                                  : 'primary.light',
+                              backgroundColor: selectedMonth === month.value ? 'primary.main' : 'primary.light',
                               color: 'primary.contrastText',
                             },
                           }}
@@ -472,22 +469,13 @@ export default function Dashboard({ userEmail }) {
             </List>
           </Collapse>
 
-          <ListItemButton
-            selected={painelAtivo === 'relatorios'}
-            onClick={() => setPainelAtivo('relatorios')}
-          >
+          <ListItemButton selected={painelAtivo === 'relatorios'} onClick={() => setPainelAtivo('relatorios')}>
             <ListItemText primary="Relatórios" />
           </ListItemButton>
         </List>
       </Drawer>
 
       <Box sx={{ flexGrow: 1, p: 2 }}>
-        {!apiOk && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            Não consegui falar com a API. Verifique se o backend no Render está online e a variável REACT_APP_API_URL está correta.
-          </Alert>
-        )}
-
         {painelAtivo === 'fopam' ? (
           <>
             <Typography variant="h5" gutterBottom>
@@ -497,20 +485,18 @@ export default function Dashboard({ userEmail }) {
             {selectedMonth ? (
               <>
                 <Box sx={{ mb: 2, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
-                  <Button
-                    variant="contained"
-                    startIcon={<AddIcon />}
-                    onClick={handleOpenNew}
-                  >
+                  <Button variant="contained" startIcon={<AddIcon />} onClick={handleOpenNew}>
                     Nova Produção
                   </Button>
                   <Button variant="outlined" onClick={handleExport} disabled={!selectedMonth}>
                     Exportar FOPAM
                   </Button>
                 </Box>
+
                 <Typography variant="body1" sx={{ mb: 2 }}>
                   Mês selecionado: {selectedMonth}
                 </Typography>
+
                 <Paper sx={{ borderRadius: 2, overflow: 'hidden', backgroundColor: 'background.paper' }}>
                   <Table>
                     <TableHead>
@@ -545,31 +531,16 @@ export default function Dashboard({ userEmail }) {
                               <TableCell
                                 colSpan={9}
                                 sx={{ cursor: 'pointer', pl: 1, backgroundColor: 'background.paper' }}
-                                onClick={() =>
-                                  setOpenDates((prev) => ({ ...prev, [dateStr]: !prev[dateStr] }))
-                                }
+                                onClick={() => setOpenDates((prev) => ({ ...prev, [dateStr]: !prev[dateStr] }))}
                               >
                                 <Box sx={{ display: 'flex', alignItems: 'center' }}>
                                   <IconButton size="small">
                                     {dateOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                                   </IconButton>
-                                  <Typography
-                                    variant="subtitle2"
-                                    fontWeight="bold"
-                                    sx={{ display: 'flex', alignItems: 'center' }}
-                                  >
-                                    Dia {dia} — ({projCount} projetos) — Horas: {totHoras.toLocaleString(
-                                      'pt-BR'
-                                    )} — Pag{' '}
-                                    {totPag.toLocaleString('pt-BR', {
-                                      style: 'currency',
-                                      currency: 'BRL',
-                                    })}{' '}
-                                    — Fat{' '}
-                                    {totFat.toLocaleString('pt-BR', {
-                                      style: 'currency',
-                                      currency: 'BRL',
-                                    })}
+                                  <Typography variant="subtitle2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center' }}>
+                                    Dia {dia} — ({projCount} projetos) — Horas: {totHoras.toLocaleString('pt-BR')} — Pag:{' '}
+                                    {totPag.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} — Fat:{' '}
+                                    {totFat.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                     {allValidatedDate && <CheckCircleIcon sx={{ color: 'success.main', ml: 1 }} />}
                                   </Typography>
                                 </Box>
@@ -583,9 +554,7 @@ export default function Dashboard({ userEmail }) {
                                 const totH = projItem.totals.horas;
                                 const totP = projItem.totals.pagamento;
                                 const totF = projItem.totals.faturamento;
-                                const allValidatedProj = projItem.professionals.every(
-                                  (p) => p.producao_validada
-                                );
+                                const allValidatedProj = projItem.professionals.every((p) => p.producao_validada);
                                 return (
                                   <React.Fragment key={`project-${dateStr}-${projKey}`}>
                                     <TableRow>
@@ -595,10 +564,7 @@ export default function Dashboard({ userEmail }) {
                                         onClick={() =>
                                           setOpenProjects((prev) => ({
                                             ...prev,
-                                            [dateStr]: {
-                                              ...prev[dateStr],
-                                              [projKey]: !prev[dateStr]?.[projKey],
-                                            },
+                                            [dateStr]: { ...prev[dateStr], [projKey]: !prev[dateStr]?.[projKey] },
                                           }))
                                         }
                                       >
@@ -606,22 +572,10 @@ export default function Dashboard({ userEmail }) {
                                           <IconButton size="small">
                                             {projOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                                           </IconButton>
-                                          <Typography
-                                            variant="subtitle2"
-                                            fontWeight="bold"
-                                            sx={{ display: 'flex', alignItems: 'center' }}
-                                          >
-                                            {projKey || '(Sem projeto)'} — ({projItem.count} profissionais) — Horas{' '}
-                                            {totH.toLocaleString('pt-BR')} — Pag{' '}
-                                            {totP.toLocaleString('pt-BR', {
-                                              style: 'currency',
-                                              currency: 'BRL',
-                                            })}{' '}
-                                            — Fat{' '}
-                                            {totF.toLocaleString('pt-BR', {
-                                              style: 'currency',
-                                              currency: 'BRL',
-                                            })}
+                                          <Typography variant="subtitle2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center' }}>
+                                            {projKey || '(Sem projeto)'} — ({projItem.count} profissionais) — Horas: {totH.toLocaleString('pt-BR')}
+                                            {' '}— Pag: {totP.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                            {' '}— Fat: {totF.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                             {allValidatedProj && <CheckCircleIcon sx={{ color: 'success.main', ml: 1 }} />}
                                           </Typography>
                                         </Box>
@@ -637,63 +591,45 @@ export default function Dashboard({ userEmail }) {
                                           <TableRow
                                             key={`prof-${dateStr}-${projKey}-${prof.profissional}`}
                                             hover
-                                            sx={{
-                                              '&:hover': { backgroundColor: (theme) => theme.palette.action.hover },
-                                            }}
+                                            sx={{ '&:hover': { backgroundColor: (theme) => theme.palette.action.hover } }}
                                           >
                                             <TableCell sx={{ pl: 6 }}>
                                               <Box sx={{ display: 'flex', alignItems: 'center' }}>
                                                 {prof.profissional}
                                                 {prof.producao_validada && (
-                                                  <CheckCircleIcon
-                                                    sx={{ color: 'success.main', ml: 0.5, fontSize: '1rem' }}
-                                                  />
+                                                  <CheckCircleIcon sx={{ color: 'success.main', ml: 0.5, fontSize: '1rem' }} />
                                                 )}
                                               </Box>
                                             </TableCell>
                                             <TableCell>
                                               {(() => {
-                                                const uniqueV = Array.from(
-                                                  new Set(prof.rows.map((r) => r.vinculo || ''))
-                                                );
+                                                const uniqueV = Array.from(new Set(prof.rows.map((r) => r.vinculo || '')));
                                                 return uniqueV.length === 1 ? uniqueV[0] : 'Vários';
                                               })()}
                                             </TableCell>
                                             <TableCell align="right">{hours.toLocaleString('pt-BR')}</TableCell>
                                             <TableCell align="right">
-                                              {pag.toLocaleString('pt-BR', {
-                                                style: 'currency',
-                                                currency: 'BRL',
-                                              })}
+                                              {pag.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                             </TableCell>
                                             <TableCell align="right">
-                                              {fat.toLocaleString('pt-BR', {
-                                                style: 'currency',
-                                                currency: 'BRL',
-                                              })}
+                                              {fat.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                             </TableCell>
                                             <TableCell>
                                               <Switch
                                                 checked={!!prof.producao_validada}
-                                                onChange={(e) =>
-                                                  handleBoolChange(prof, 'producao_validada', e.target.checked)
-                                                }
+                                                onChange={(e) => handleBoolChange(prof, 'producao_validada', e.target.checked)}
                                               />
                                             </TableCell>
                                             <TableCell>
                                               <Switch
                                                 checked={!!prof.pagamento_lancado}
-                                                onChange={(e) =>
-                                                  handleBoolChange(prof, 'pagamento_lancado', e.target.checked)
-                                                }
+                                                onChange={(e) => handleBoolChange(prof, 'pagamento_lancado', e.target.checked)}
                                               />
                                             </TableCell>
                                             <TableCell>
                                               <Switch
                                                 checked={!!prof.faturamento_validado}
-                                                onChange={(e) =>
-                                                  handleBoolChange(prof, 'faturamento_validado', e.target.checked)
-                                                }
+                                                onChange={(e) => handleBoolChange(prof, 'faturamento_validado', e.target.checked)}
                                               />
                                             </TableCell>
                                             <TableCell align="center">
@@ -716,10 +652,11 @@ export default function Dashboard({ userEmail }) {
                     </TableBody>
                   </Table>
                 </Paper>
+
                 <Box sx={{ mt: 2 }}>
                   <Typography variant="subtitle1" sx={{ fontWeight: 'bold' }}>
-                    TOTAL — Horas: {totals.horas} | Pagamento{' '}
-                    {totals.pagamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} | Faturamento{' '}
+                    TOTAL — Horas: {totals.horas} | Pagamento:{' '}
+                    {totals.pagamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} | Faturamento:{' '}
                     {totals.faturamento.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </Typography>
                 </Box>
@@ -741,9 +678,7 @@ export default function Dashboard({ userEmail }) {
                   <TextField
                     label="Profissional"
                     value={dialogGlobal.profissional || ''}
-                    onChange={(e) =>
-                      setDialogGlobal((prev) => ({ ...prev, profissional: e.target.value }))
-                    }
+                    onChange={(e) => setDialogGlobal((prev) => ({ ...prev, profissional: e.target.value }))}
                     fullWidth
                   />
                   <TextField
@@ -756,18 +691,10 @@ export default function Dashboard({ userEmail }) {
                     label="Data Pagamento"
                     type="date"
                     value={dialogGlobal.data_pagamento || ''}
-                    onChange={(e) =>
-                      setDialogGlobal((prev) => ({ ...prev, data_pagamento: e.target.value }))
-                    }
+                    onChange={(e) => setDialogGlobal((prev) => ({ ...prev, data_pagamento: e.target.value }))}
                     InputLabelProps={{ shrink: true }}
                   />
-                  <TextField
-                    label="Mês"
-                    type="date"
-                    value={dialogGlobal.mes || ''}
-                    disabled
-                    InputLabelProps={{ shrink: true }}
-                  />
+                  <TextField label="Mês" type="date" value={dialogGlobal.mes || ''} disabled InputLabelProps={{ shrink: true }} />
 
                   <Typography variant="subtitle1">Serviços</Typography>
                   <Table size="small">
@@ -802,14 +729,15 @@ export default function Dashboard({ userEmail }) {
                           <TableCell align="right">
                             <TextField
                               type="number"
+                              inputProps={{ step: 0.01 }}
                               value={r.horas}
                               onChange={(e) => {
                                 const v = parseFloat(e.target.value) || 0;
                                 setDialogRows((rows) => {
-                                  const nr = [...rows];
+                                  let nr = [...rows];
                                   nr[idx].horas = v;
-                                  if (autoCalcPay) nr[idx].pagamento = parseFloat((v * dialogRatePay).toFixed(2));
-                                  if (autoCalcBill) nr[idx].faturamento = parseFloat((v * dialogRateBill).toFixed(2));
+                                  if (autoCalcPay) nr = recalcPagamentos(nr, dialogRatePay);
+                                  if (autoCalcBill) nr = recalcFaturamentos(nr, dialogRateBill);
                                   return nr;
                                 });
                               }}
@@ -819,8 +747,16 @@ export default function Dashboard({ userEmail }) {
                           <TableCell align="right">
                             <TextField
                               type="number"
+                              inputProps={{ step: 0.01 }}
                               value={r.pagamento}
-                              onChange={() => {}}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                setDialogRows((rows) => {
+                                  const nr = [...rows];
+                                  nr[idx].pagamento = Number.isNaN(v) ? 0 : v;
+                                  return nr;
+                                });
+                              }}
                               fullWidth
                               disabled={autoCalcPay}
                             />
@@ -828,18 +764,22 @@ export default function Dashboard({ userEmail }) {
                           <TableCell align="right">
                             <TextField
                               type="number"
+                              inputProps={{ step: 0.01 }}
                               value={r.faturamento}
-                              onChange={() => {}}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                setDialogRows((rows) => {
+                                  const nr = [...rows];
+                                  nr[idx].faturamento = Number.isNaN(v) ? 0 : v;
+                                  return nr;
+                                });
+                              }}
                               fullWidth
                               disabled={autoCalcBill}
                             />
                           </TableCell>
                           <TableCell align="center">
-                            <IconButton
-                              onClick={() =>
-                                setDialogRows((rows) => rows.filter((_, i) => i !== idx))
-                              }
-                            >
+                            <IconButton onClick={() => setDialogRows((rows) => rows.filter((_, i) => i !== idx))}>
                               <DeleteIcon />
                             </IconButton>
                           </TableCell>
@@ -847,6 +787,7 @@ export default function Dashboard({ userEmail }) {
                       ))}
                     </TableBody>
                   </Table>
+
                   <Button
                     startIcon={<AddIcon />}
                     onClick={() =>
@@ -874,12 +815,7 @@ export default function Dashboard({ userEmail }) {
                       const v = parseFloat(e.target.value) || 0;
                       setDialogRatePay(v);
                       if (autoCalcPay) {
-                        setDialogRows((rows) =>
-                          rows.map((r) => {
-                            const newPag = parseFloat((r.horas * v).toFixed(2));
-                            return { ...r, pagamento: newPag };
-                          })
-                        );
+                        setDialogRows((rows) => recalcPagamentos(rows, v));
                       }
                     }}
                   />
@@ -892,12 +828,7 @@ export default function Dashboard({ userEmail }) {
                       const v = parseFloat(e.target.value) || 0;
                       setDialogRateBill(v);
                       if (autoCalcBill) {
-                        setDialogRows((rows) =>
-                          rows.map((r) => {
-                            const newFat = parseFloat((r.horas * v).toFixed(2));
-                            return { ...r, faturamento: newFat };
-                          })
-                        );
+                        setDialogRows((rows) => recalcFaturamentos(rows, v));
                       }
                     }}
                   />
@@ -906,7 +837,11 @@ export default function Dashboard({ userEmail }) {
                     control={
                       <Switch
                         checked={autoCalcPay}
-                        onChange={(e) => setAutoCalcPay(e.target.checked)}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setAutoCalcPay(on);
+                          if (on) setDialogRows((rows) => recalcPagamentos(rows, dialogRatePay));
+                        }}
                       />
                     }
                     label="Recalcular Pagamento automaticamente"
@@ -915,7 +850,11 @@ export default function Dashboard({ userEmail }) {
                     control={
                       <Switch
                         checked={autoCalcBill}
-                        onChange={(e) => setAutoCalcBill(e.target.checked)}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setAutoCalcBill(on);
+                          if (on) setDialogRows((rows) => recalcFaturamentos(rows, dialogRateBill));
+                        }}
                       />
                     }
                     label="Recalcular Faturamento automaticamente"
@@ -925,12 +864,7 @@ export default function Dashboard({ userEmail }) {
                     control={
                       <Checkbox
                         checked={dialogFlags.producao_validada}
-                        onChange={(e) =>
-                          setDialogFlags((f) => ({
-                            ...f,
-                            producao_validada: e.target.checked,
-                          }))
-                        }
+                        onChange={(e) => setDialogFlags((f) => ({ ...f, producao_validada: e.target.checked }))}
                       />
                     }
                     label="Produção Validada"
@@ -939,12 +873,7 @@ export default function Dashboard({ userEmail }) {
                     control={
                       <Checkbox
                         checked={dialogFlags.pagamento_lancado}
-                        onChange={(e) =>
-                          setDialogFlags((f) => ({
-                            ...f,
-                            pagamento_lancado: e.target.checked,
-                          }))
-                        }
+                        onChange={(e) => setDialogFlags((f) => ({ ...f, pagamento_lancado: e.target.checked }))}
                       />
                     }
                     label="Pagamento Lançado"
@@ -953,12 +882,7 @@ export default function Dashboard({ userEmail }) {
                     control={
                       <Checkbox
                         checked={dialogFlags.faturamento_validado}
-                        onChange={(e) =>
-                          setDialogFlags((f) => ({
-                            ...f,
-                            faturamento_validado: e.target.checked,
-                          }))
-                        }
+                        onChange={(e) => setDialogFlags((f) => ({ ...f, faturamento_validado: e.target.checked }))}
                       />
                     }
                     label="Faturamento Validado"
