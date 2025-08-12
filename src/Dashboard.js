@@ -1,6 +1,7 @@
 // src/Dashboard.js
 import React, { useState, useEffect, useRef } from 'react';
 import Relatorios from './Relatorios';
+import Indicadores from './Indicadores';
 import {
   Box,
   Drawer,
@@ -52,7 +53,7 @@ const monthsList = [
 ];
 
 export default function Dashboard({ userEmail, userName }) {
-  // controla qual painel interno mostrar: "fopam" ou "relatorios"
+  // controla qual painel interno mostrar: "fopam" | "relatorios" | "indicadores"
   const [painelAtivo, setPainelAtivo] = useState('fopam');
 
   // --- Estados do FOPAM ---
@@ -411,14 +412,13 @@ export default function Dashboard({ userEmail, userName }) {
   const handleSaveNf = async () => {
     try {
       setSavingNf(true);
-      // atualiza sempre os campos nf_* das linhas selecionadas
       for (const r of nfRows) {
         await axios.post('/update', { id: r.id, field: 'nf_servico', value: r.nf_servico || null });
         await axios.post('/update', { id: r.id, field: 'nf_faturamento', value: r.nf_faturamento || null });
       }
       setNfDialogOpen(false);
       setSnackbar({ open: true, severity: 'success', message: 'Dados incluídos com sucesso.' });
-      await fetchData(selectedMonth, true); // preserva expansões
+      await fetchData(selectedMonth, true);
     } catch (err) {
       console.error('Erro ao incluir NFs:', err);
       setSnackbar({ open: true, severity: 'error', message: 'Falha ao incluir NFs. Tente novamente.' });
@@ -431,18 +431,12 @@ export default function Dashboard({ userEmail, userName }) {
   const handleBoolChange = async (idOrObj, field, value) => {
     try {
       if (typeof idOrObj === 'object' && Array.isArray(idOrObj.ids)) {
-        // grupo de linhas
         await Promise.all(idOrObj.ids.map((rid) => axios.post('/update', { id: rid, field, value })));
         await fetchData(selectedMonth, true); // preserva expansões
       } else {
-        // linha única (otimista)
         await axios.post('/update', { id: idOrObj, field, value });
+        // update otimista e depois refetch preservando expansão
         setData((prev) => prev.map((r) => (r.id === idOrObj ? { ...r, [field]: value } : r)));
-        // Recalcula hierarquia sem perder expansão
-        const { datesList, globalTotals } = buildHierarchy(
-          prev => prev // (não temos prev direto aqui, então vamos refazer com o state atualizado abaixo)
-        );
-        // Simples: refetch preservando expansão
         await fetchData(selectedMonth, true);
       }
       setSnackbar({ open: true, severity: 'success', message: 'Atualizado.' });
@@ -522,13 +516,11 @@ export default function Dashboard({ userEmail, userName }) {
       setSavingProfile(true);
       const trimmed = (profileName || '').trim();
       if (trimmed && trimmed !== userName) {
-        // OBS: ajuste a rota conforme seu backend (/profile OU /profile/update-name)
         await axios.post('/profile', { name: trimmed });
       }
       if (avatarFile) {
         const fd = new FormData();
         fd.append('file', avatarFile);
-        // OBS: ajuste a rota conforme seu backend (/profile/avatar OU /profile/upload-avatar)
         const resp = await axios.post('/profile/avatar', fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
@@ -638,6 +630,10 @@ export default function Dashboard({ userEmail, userName }) {
 
           <ListItemButton selected={painelAtivo === 'relatorios'} onClick={() => setPainelAtivo('relatorios')}>
             <ListItemText primary="Relatórios" />
+          </ListItemButton>
+
+          <ListItemButton selected={painelAtivo === 'indicadores'} onClick={() => setPainelAtivo('indicadores')}>
+            <ListItemText primary="Indicadores" />
           </ListItemButton>
         </List>
       </Drawer>
@@ -1207,8 +1203,10 @@ export default function Dashboard({ userEmail, userName }) {
               </DialogActions>
             </Dialog>
           </>
-        ) : (
+        ) : painelAtivo === 'relatorios' ? (
           <Relatorios />
+        ) : (
+          <Indicadores />
         )}
       </Box>
 
