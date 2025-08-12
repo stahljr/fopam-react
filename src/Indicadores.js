@@ -5,8 +5,9 @@ import {
   Table, TableHead, TableRow, TableCell, TableBody,
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions,
   Tooltip, Snackbar, Alert, Stack, LinearProgress, Collapse,
-  Checkbox, ListItemText
+  Checkbox, ListItemText, useMediaQuery
 } from "@mui/material";
+import { useTheme } from "@mui/material/styles";
 import EditIcon from "@mui/icons-material/Edit";
 import DeleteIcon from "@mui/icons-material/Delete";
 import ShowChartIcon from "@mui/icons-material/ShowChart";
@@ -36,14 +37,34 @@ const anosList = (() => {
 
 const menuProps = { PaperProps: { style: { maxHeight: 320 } } };
 
-function toNumber(v, tipo) {
+// inputs de mês: grandes e legíveis
+const CELL_SX = {
+  minWidth: { xs: 92, sm: 104, md: 112 },
+  "& .MuiOutlinedInput-root": { borderRadius: 1.2 },
+  "& .MuiInputBase-input": { fontSize: 16, padding: "10px 12px", textAlign: "right" },
+};
+
+// Cabeçalho: mantém fundo/cores padrão do tema, só negrito
+const HEAD_WRAP_SX = {
+  "& .MuiTableCell-root": { fontWeight: 700 }
+};
+
+function toNumber(v) {
   if (v === "" || v === null || v === undefined) return "";
   const n = Number(v);
-  if (!isFinite(n)) return "";
-  return tipo === "int" ? Math.round(n) : n;
+  return Number.isFinite(n) ? n : "";
 }
 const keyFor = (r) => `${r.projeto}||${r.indicador}`;
 const labelFor = (r) => `${r.projeto} — ${r.indicador}`;
+
+// Se TODOS os preenchidos forem inteiros → "int"; senão "decimal"
+function inferTipoFromValues(valObj) {
+  const filled = Object.values(valObj ?? {})
+    .map(v => (v === "" || v === null || v === undefined ? null : Number(v)))
+    .filter(v => v !== null && Number.isFinite(v));
+  if (filled.length === 0) return "decimal";
+  return filled.every(v => Math.floor(v) === v) ? "int" : "decimal";
+}
 
 // paleta consistente para múltiplas linhas
 const COLORS = [
@@ -53,6 +74,9 @@ const COLORS = [
 ];
 
 export default function Indicadores() {
+  const theme = useTheme();
+  const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
+
   // filtros
   const [ano, setAno] = useState(new Date().getFullYear());
   const [projetosFiltro, setProjetosFiltro] = useState([]); // múltiplos
@@ -71,7 +95,6 @@ export default function Indicadores() {
   const [addProjeto, setAddProjeto] = useState("");
   const [addProjetoSug, setAddProjetoSug] = useState("");
   const [addIndicador, setAddIndicador] = useState("");
-  const [addTipo, setAddTipo] = useState("decimal");
   const [addAno, setAddAno] = useState(new Date().getFullYear());
   const [addValores, setAddValores] = useState(Object.fromEntries(MESES.map(m => [m.k, ""])));
   const [savingAdd, setSavingAdd] = useState(false);
@@ -92,7 +115,7 @@ export default function Indicadores() {
   // feedback
   const [snack, setSnack] = useState({ open: false, type: "success", text: "" });
 
-  // carrega lista de projetos (da tabela indicadores) — filtra por ano
+  // carrega lista de projetos (tabela de indicadores) — filtra por ano
   const loadProjetosFromIndicadores = async () => {
     try {
       const r = await axios.get("/indicadores/projetos", { params: { ano } });
@@ -130,7 +153,6 @@ export default function Indicadores() {
     try {
       const r = await axios.get("/indicadores", { params: { ano } });
       setAllRowsYear(r.data || []);
-      // expande todos por padrão no diálogo
       const allProj = [...new Set((r.data||[]).map(i => i.projeto))];
       const cmpOpen = {};
       allProj.forEach(p => cmpOpen[p] = false);
@@ -179,10 +201,7 @@ export default function Indicadores() {
     }));
   }, [allRowsYear]);
 
-  // helpers
-  const handleSetValor = (k, v, stateSetter) =>
-    stateSetter(prev => ({ ...prev, [k]: v }));
-
+  const handleSetValor = (k, v, setter) => setter(prev => ({ ...prev, [k]: v }));
   const limparFiltros = () => setProjetosFiltro([]);
 
   // ADD
@@ -190,7 +209,6 @@ export default function Indicadores() {
     setAddProjeto("");
     setAddProjetoSug("");
     setAddIndicador("");
-    setAddTipo("decimal");
     setAddAno(ano);
     setAddValores(Object.fromEntries(MESES.map(m => [m.k, ""])));
     setAddOpen(true);
@@ -206,15 +224,17 @@ export default function Indicadores() {
     for (const m of MESES) {
       const v = addValores[m.k];
       if (v !== "" && v !== null && v !== undefined) {
-        onlyFilled[m.k] = toNumber(v, addTipo);
+        onlyFilled[m.k] = toNumber(v);
       }
     }
+    const tipo = inferTipoFromValues(onlyFilled);
+
     try {
       setSavingAdd(true);
       await axios.post("/indicadores/upsert", {
         projeto: projetoFinal,
         indicador: addIndicador.trim(),
-        tipo: addTipo,
+        tipo,
         ano: addAno,
         valores: onlyFilled,
       });
@@ -222,7 +242,6 @@ export default function Indicadores() {
       setAddOpen(false);
       await carregar(true);
       await carregarAllYear();
-      // adiciona no combo se for projeto novo
       if (!projetosOptions.includes(projetoFinal)) {
         setProjetosOptions(prev => [...prev, projetoFinal].sort((a,b)=>a.localeCompare(b)));
       }
@@ -244,14 +263,14 @@ export default function Indicadores() {
     const body = {
       projeto: editBuffer.projeto,
       indicador: editBuffer.indicador,
-      tipo: editBuffer.tipo,
+      tipo: inferTipoFromValues(editBuffer.valores),
       ano: editBuffer.ano,
       valores: {},
     };
     for (const m of MESES) {
       const v = editBuffer.valores[m.k];
       if (v !== "" && v !== null && v !== undefined) {
-        body.valores[m.k] = toNumber(v, editBuffer.tipo);
+        body.valores[m.k] = toNumber(v);
       }
     }
     try {
@@ -305,7 +324,6 @@ export default function Indicadores() {
     });
   }, [chartRow, compareSeries]);
 
-  // render das linhas com cor e LabelList
   const renderLines = () => {
     if (!chartRow) return null;
     const series = [chartRow, ...compareSeries];
@@ -322,7 +340,6 @@ export default function Indicadores() {
 
   // DIÁLOGO COMPARAR — “estilo FOPAM”
   const openCompare = () => {
-    // inicia estados de expand/projetos no diálogo (padrão fechado)
     const cmpOpen = {};
     groupedAllYear.forEach(sec => { cmpOpen[sec.projeto] = false; });
     setCompareOpenProj(cmpOpen);
@@ -378,7 +395,7 @@ export default function Indicadores() {
               renderValue: (v) => (Array.isArray(v) ? v.join(", ") : ""),
               MenuProps: menuProps,
             }}
-            sx={{ minWidth: 360 }}
+            sx={{ minWidth: { xs: 260, md: 360 } }}
           >
             {projetosOptions.map((p) => (
               <MenuItem key={p} value={p}>
@@ -431,11 +448,10 @@ export default function Indicadores() {
 
                 <Collapse in={opened} timeout="auto" unmountOnExit>
                   <Box sx={{ px: 2, pb: 2 }}>
-                    <Table size="small" sx={{ minWidth: 1000 }}>
-                      <TableHead>
+                    <Table size="small" sx={{ minWidth: { xs: 1000, md: 1200 } }}>
+                      <TableHead sx={HEAD_WRAP_SX}>
                         <TableRow>
                           <TableCell width={260}>Indicador</TableCell>
-                          <TableCell width={90}>Tipo</TableCell>
                           {MESES.map(m => <TableCell key={m.k} align="right">{m.l}</TableCell>)}
                           <TableCell align="center" width={190}>Ações</TableCell>
                         </TableRow>
@@ -448,14 +464,12 @@ export default function Indicadores() {
                           return (
                             <TableRow key={k} hover>
                               <TableCell>{row.indicador}</TableCell>
-                              <TableCell>{row.tipo}</TableCell>
                               {MESES.map(m => (
                                 <TableCell key={m.k} align="right">
                                   {isEdit ? (
                                     <TextField
                                       type="number"
-                                      size="small"
-                                      inputProps={{ step: row.tipo === "int" ? 1 : 0.01 }}
+                                      size="medium"
                                       value={buf.valores[m.k] ?? ""}
                                       onChange={(e) => {
                                         const v = e.target.value;
@@ -464,6 +478,8 @@ export default function Indicadores() {
                                           valores: { ...prev.valores, [m.k]: v }
                                         }));
                                       }}
+                                      inputProps={{ step: "any" }}
+                                      sx={CELL_SX}
                                     />
                                   ) : (
                                     (buf.valores[m.k] ?? "") !== "" ? buf.valores[m.k] : "-"
@@ -510,7 +526,7 @@ export default function Indicadores() {
       </Paper>
 
       {/* Diálogo Novo Projeto/Indicador */}
-      <Dialog open={addOpen} onClose={() => (savingAdd ? null : setAddOpen(false))} maxWidth="md" fullWidth>
+      <Dialog open={addOpen} onClose={() => (savingAdd ? null : setAddOpen(false))} maxWidth="lg" fullWidth fullScreen={fullScreen}>
         <DialogTitle>Novo Projeto/Indicador</DialogTitle>
         <DialogContent dividers>
           {savingAdd && (
@@ -526,7 +542,7 @@ export default function Indicadores() {
                 select
                 value={addProjetoSug}
                 onChange={(e) => { setAddProjetoSug(e.target.value); setAddProjeto(e.target.value); }}
-                sx={{ minWidth: 300 }}
+                sx={{ minWidth: { xs: 240, md: 300 } }}
               >
                 <MenuItem value=""><em>— não usar sugestão —</em></MenuItem>
                 {projetosOptions.map((p) => <MenuItem key={p} value={p}>{p}</MenuItem>)}
@@ -536,25 +552,15 @@ export default function Indicadores() {
                 value={addProjeto}
                 onChange={(e) => setAddProjeto(e.target.value)}
                 placeholder="Ex.: ASF - SUL/NORTE"
-                sx={{ minWidth: 300 }}
+                sx={{ minWidth: { xs: 240, md: 300 } }}
               />
               <TextField
                 label="Indicador"
                 value={addIndicador}
                 onChange={(e) => setAddIndicador(e.target.value)}
-                sx={{ minWidth: 260 }}
+                sx={{ minWidth: { xs: 220, md: 260 } }}
                 placeholder="Ex.: Horas, Plantões, Atendimentos"
               />
-              <TextField
-                label="Tipo"
-                select
-                value={addTipo}
-                onChange={(e) => setAddTipo(e.target.value)}
-                sx={{ width: 160 }}
-              >
-                <MenuItem value="decimal">Decimal</MenuItem>
-                <MenuItem value="int">Inteiro</MenuItem>
-              </TextField>
               <TextField
                 label="Ano"
                 select
@@ -567,8 +573,8 @@ export default function Indicadores() {
             </Stack>
 
             <Box sx={{ overflowX: "auto" }}>
-              <Table size="small" sx={{ minWidth: 900 }}>
-                <TableHead>
+              <Table size="small" sx={{ minWidth: { xs: 1000, md: 1200 } }}>
+                <TableHead sx={HEAD_WRAP_SX}>
                   <TableRow>
                     {MESES.map(m => <TableCell key={m.k} align="right">{m.l}</TableCell>)}
                   </TableRow>
@@ -579,10 +585,11 @@ export default function Indicadores() {
                       <TableCell key={m.k} align="right">
                         <TextField
                           type="number"
-                          size="small"
+                          size="medium"
                           value={addValores[m.k]}
-                          inputProps={{ step: addTipo === "int" ? 1 : 0.01 }}
+                          inputProps={{ step: "any" }}
                           onChange={(e) => handleSetValor(m.k, e.target.value, setAddValores)}
+                          sx={CELL_SX}
                         />
                       </TableCell>
                     ))}
@@ -601,7 +608,7 @@ export default function Indicadores() {
       </Dialog>
 
       {/* Gráfico */}
-      <Dialog open={chartOpen} onClose={() => setChartOpen(false)} maxWidth="md" fullWidth>
+      <Dialog open={chartOpen} onClose={() => setChartOpen(false)} maxWidth="md" fullWidth fullScreen={fullScreen}>
         <DialogTitle>
           {chartRow ? `${chartRow.projeto} — ${chartRow.indicador} (${chartRow.ano})` : "Gráfico"}
         </DialogTitle>
@@ -617,7 +624,7 @@ export default function Indicadores() {
             </Button>
           </Box>
 
-          <Box sx={{ height: 360 }}>
+          <Box sx={{ height: { xs: 300, md: 360 } }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -636,7 +643,7 @@ export default function Indicadores() {
       </Dialog>
 
       {/* Diálogo de Comparação — estilo FOPAM */}
-      <Dialog open={compareOpen} onClose={() => (compareLoading ? null : setCompareOpen(false))} maxWidth="md" fullWidth>
+      <Dialog open={compareOpen} onClose={() => (compareLoading ? null : setCompareOpen(false))} maxWidth="md" fullWidth fullScreen={fullScreen}>
         <DialogTitle>Comparar indicadores (Ano {ano})</DialogTitle>
         <DialogContent dividers>
           {compareLoading && (
@@ -672,8 +679,8 @@ export default function Indicadores() {
 
                     <Collapse in={opened} timeout="auto" unmountOnExit>
                       <Box sx={{ px: 2, pb: 1 }}>
-                        <Table size="small">
-                          <TableHead>
+                        <Table size="small" sx={{ minWidth: { xs: 900, md: 1000 } }}>
+                          <TableHead sx={HEAD_WRAP_SX}>
                             <TableRow>
                               <TableCell width={40}></TableCell>
                               <TableCell>Indicador</TableCell>
@@ -683,7 +690,7 @@ export default function Indicadores() {
                           <TableBody>
                             {section.indicadores.map(r => {
                               const k = keyFor(r);
-                              const disabled = chartRow && k === keyFor(chartRow); // impede selecionar o base
+                              const disabled = chartRow && k === keyFor(chartRow);
                               const checked = compareKeys.includes(k);
                               return (
                                 <TableRow key={`cmp-row-${k}`} hover>
