@@ -28,6 +28,8 @@ import {
   Switch,
   Tooltip,
   LinearProgress,
+  Snackbar,
+  Alert,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import EditIcon from '@mui/icons-material/Edit';
@@ -37,6 +39,7 @@ import ExpandMoreIcon from '@mui/icons-material/KeyboardArrowRight';
 import ExpandLessIcon from '@mui/icons-material/KeyboardArrowDown';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import ClearIcon from '@mui/icons-material/Clear';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import axios from 'axios';
 
 // Largura fixa da barra lateral
@@ -72,6 +75,7 @@ export default function Dashboard({ userEmail, userName }) {
   });
   const [dialogRatePay, setDialogRatePay] = useState(0);
   const [dialogRateBill, setDialogRateBill] = useState(0);
+  const [savingDialog, setSavingDialog] = useState(false);
 
   // autocálculo DESLIGADO por padrão
   const [autoCalcPay, setAutoCalcPay] = useState(false);
@@ -84,34 +88,32 @@ export default function Dashboard({ userEmail, userName }) {
   // --- Perfil (nome + avatar) ---
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState(userName || '');
-  const [avatarUrl, setAvatarUrl] = useState(null);        // vindo do backend (se/tq)
-  const [avatarFile, setAvatarFile] = useState(null);      // arquivo selecionado
+  const [avatarUrl, setAvatarUrl] = useState(null);
+  const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const fileInputRef = useRef(null);
 
+  // --- NF (novo diálogo) ---
+  const [nfDialogOpen, setNfDialogOpen] = useState(false);
+  const [nfRows, setNfRows] = useState([]); // {id, data_servico, nf_servico, nf_faturamento}
+  const [savingNf, setSavingNf] = useState(false);
+
+  // feedback global
+  const [snackbar, setSnackbar] = useState({ open: false, severity: 'success', message: '' });
+
   useEffect(() => {
-    // sempre que o prop userName mudar, sincroniza
     setProfileName(userName || '');
   }, [userName]);
 
-  // opcional: tenta buscar avatar atual (se backend der suporte em /user_info)
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         const r = await axios.get('/user_info');
-        // se o backend passar avatar_url, usa aqui:
-        if (mounted && r?.data?.avatar_url) {
-          setAvatarUrl(r.data.avatar_url);
-        }
-        // também atualiza nome caso venha mais novo do backend
-        if (mounted && r?.data?.name && !userName) {
-          setProfileName(r.data.name);
-        }
-      } catch {
-        // silencioso
-      }
+        if (mounted && r?.data?.avatar_url) setAvatarUrl(r.data.avatar_url);
+        if (mounted && r?.data?.name && !userName) setProfileName(r.data.name);
+      } catch {}
     })();
     return () => { mounted = false; };
   }, []); // uma vez
@@ -167,9 +169,9 @@ export default function Dashboard({ userEmail, userName }) {
       projObj.totals.pagamento += p;
       projObj.totals.faturamento += f;
 
-      dateObj.totals.horas += h;
-      dateObj.totals.pagamento += p;
-      dateObj.totals.faturamento += f;
+      datesMap[dateKey].totals.horas += h;
+      datesMap[dateKey].totals.pagamento += p;
+      datesMap[dateKey].totals.faturamento += f;
 
       globalTotals.horas += h;
       globalTotals.pagamento += p;
@@ -215,8 +217,25 @@ export default function Dashboard({ userEmail, userName }) {
     return { datesList, globalTotals };
   };
 
+  // aplica preservação de estado de expansão
+  const buildOpenState = (datesList, prevDates, prevProjects, preserve) => {
+    const initDates = {};
+    const initProjects = {};
+    datesList.forEach((d) => {
+      initDates[d.date] = preserve ? !!prevDates[d.date] : false;
+      initProjects[d.date] = {};
+      d.projects.forEach((p) => {
+        const wasOpen = preserve && prevProjects[d.date] && prevProjects[d.date][p.project];
+        initProjects[d.date][p.project] = !!wasOpen;
+      });
+    });
+    return { initDates, initProjects };
+  };
+
   // busca dados do backend
-  const fetchData = async (mes) => {
+  const fetchData = async (mes, preserveOpen = false) => {
+    const prevDates = preserveOpen ? { ...openDates } : {};
+    const prevProjects = preserveOpen ? JSON.parse(JSON.stringify(openProjects || {})) : {};
     try {
       const res = await axios.get('/data', { params: { mes } });
       const raw = res.data || [];
@@ -225,15 +244,7 @@ export default function Dashboard({ userEmail, userName }) {
       setHierarchy(datesList);
       setTotals(globalTotals);
 
-      const initDates = {};
-      const initProjects = {};
-      datesList.forEach((d) => {
-        initDates[d.date] = false;
-        initProjects[d.date] = {};
-        d.projects.forEach((p) => {
-          initProjects[d.date][p.project] = false;
-        });
-      });
+      const { initDates, initProjects } = buildOpenState(datesList, prevDates, prevProjects, preserveOpen);
       setOpenDates(initDates);
       setOpenProjects(initProjects);
     } catch (err) {
@@ -245,7 +256,7 @@ export default function Dashboard({ userEmail, userName }) {
   };
 
   useEffect(() => {
-    if (selectedMonth) fetchData(selectedMonth);
+    if (selectedMonth) fetchData(selectedMonth, false);
   }, [selectedMonth]);
 
   // Helpers de recálculo quando switches forem ligados
@@ -317,9 +328,22 @@ export default function Dashboard({ userEmail, userName }) {
     setDialogOpen(true);
   };
 
+  // abrir diálogo NF para grupo (profissional) ou linha única
+  const handleOpenNfDialog = (row) => {
+    const rowsArr = (row.rows || [row]).map((r) => ({
+      id: r.id,
+      data_servico: r.data_servico,
+      nf_servico: r.nf_servico || '',
+      nf_faturamento: r.nf_faturamento || '',
+    }));
+    setNfRows(rowsArr);
+    setNfDialogOpen(true);
+  };
+
   // salvar (new/edit)
   const handleSaveDialog = async () => {
     try {
+      setSavingDialog(true);
       if (dialogMode === 'new') {
         for (const r of dialogRows) {
           const payload = {
@@ -371,10 +395,35 @@ export default function Dashboard({ userEmail, userName }) {
           }
         }
       }
+
       setDialogOpen(false);
-      await fetchData(selectedMonth);
+      setSnackbar({ open: true, severity: 'success', message: 'Dados salvos com sucesso.' });
+      await fetchData(selectedMonth, true); // preserva expansões
     } catch (err) {
       console.error('Erro ao salvar alterações:', err);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao salvar. Tente novamente.' });
+    } finally {
+      setSavingDialog(false);
+    }
+  };
+
+  // salvar NF
+  const handleSaveNf = async () => {
+    try {
+      setSavingNf(true);
+      // atualiza sempre os campos nf_* das linhas selecionadas
+      for (const r of nfRows) {
+        await axios.post('/update', { id: r.id, field: 'nf_servico', value: r.nf_servico || null });
+        await axios.post('/update', { id: r.id, field: 'nf_faturamento', value: r.nf_faturamento || null });
+      }
+      setNfDialogOpen(false);
+      setSnackbar({ open: true, severity: 'success', message: 'Dados incluídos com sucesso.' });
+      await fetchData(selectedMonth, true); // preserva expansões
+    } catch (err) {
+      console.error('Erro ao incluir NFs:', err);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao incluir NFs. Tente novamente.' });
+    } finally {
+      setSavingNf(false);
     }
   };
 
@@ -382,16 +431,24 @@ export default function Dashboard({ userEmail, userName }) {
   const handleBoolChange = async (idOrObj, field, value) => {
     try {
       if (typeof idOrObj === 'object' && Array.isArray(idOrObj.ids)) {
-        for (const rid of idOrObj.ids) {
-          await axios.post('/update', { id: rid, field, value });
-        }
-        await fetchData(selectedMonth);
+        // grupo de linhas
+        await Promise.all(idOrObj.ids.map((rid) => axios.post('/update', { id: rid, field, value })));
+        await fetchData(selectedMonth, true); // preserva expansões
       } else {
+        // linha única (otimista)
         await axios.post('/update', { id: idOrObj, field, value });
         setData((prev) => prev.map((r) => (r.id === idOrObj ? { ...r, [field]: value } : r)));
+        // Recalcula hierarquia sem perder expansão
+        const { datesList, globalTotals } = buildHierarchy(
+          prev => prev // (não temos prev direto aqui, então vamos refazer com o state atualizado abaixo)
+        );
+        // Simples: refetch preservando expansão
+        await fetchData(selectedMonth, true);
       }
+      setSnackbar({ open: true, severity: 'success', message: 'Atualizado.' });
     } catch (err) {
       console.error('Erro ao atualizar campo booleano:', err);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao atualizar.' });
     }
   };
 
@@ -406,9 +463,11 @@ export default function Dashboard({ userEmail, userName }) {
       } else if (row.id) {
         await axios.post('/delete', { id: row.id });
       }
-      await fetchData(selectedMonth);
+      setSnackbar({ open: true, severity: 'success', message: 'Registro(s) excluído(s).' });
+      await fetchData(selectedMonth, true);
     } catch (err) {
       console.error('Erro ao excluir registro:', err);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao excluir.' });
     }
   };
 
@@ -440,7 +499,6 @@ export default function Dashboard({ userEmail, userName }) {
   const handleOpenProfile = () => setProfileOpen(true);
   const handleCloseProfile = () => {
     setProfileOpen(false);
-    // limpa seleção de arquivo ao fechar
     setAvatarFile(null);
     setAvatarPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -462,38 +520,31 @@ export default function Dashboard({ userEmail, userName }) {
   const handleSaveProfile = async () => {
     try {
       setSavingProfile(true);
-
-      // 1) Atualiza nome (se mudou)
       const trimmed = (profileName || '').trim();
       if (trimmed && trimmed !== userName) {
-        await axios.post('/profile/update-name', { name: trimmed });
+        // OBS: ajuste a rota conforme seu backend (/profile OU /profile/update-name)
+        await axios.post('/profile', { name: trimmed });
       }
-
-      // 2) Sobe avatar (se selecionado)
       if (avatarFile) {
         const fd = new FormData();
         fd.append('file', avatarFile);
-        const resp = await axios.post('/profile/upload-avatar', fd, {
+        // OBS: ajuste a rota conforme seu backend (/profile/avatar OU /profile/upload-avatar)
+        const resp = await axios.post('/profile/avatar', fd, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-        if (resp?.data?.avatar_url) {
-          setAvatarUrl(resp.data.avatar_url);
-        }
+        if (resp?.data?.avatar_url) setAvatarUrl(resp.data.avatar_url);
       }
-
       setSavingProfile(false);
       handleCloseProfile();
-
-      // opcional: recarrega /user_info pra sincronizar (se App.js depender disso)
       try { await axios.get('/user_info'); } catch {}
-
+      setSnackbar({ open: true, severity: 'success', message: 'Perfil atualizado.' });
     } catch (err) {
       console.error('Erro ao salvar perfil:', err);
       setSavingProfile(false);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao atualizar perfil.' });
     }
   };
 
-  // letra de fallback no avatar
   const fallbackInitial = (displayName || ' ').trim().charAt(0).toUpperCase();
 
   return (
@@ -749,10 +800,13 @@ export default function Dashboard({ userEmail, userName }) {
                                               />
                                             </TableCell>
                                             <TableCell align="center">
-                                              <IconButton size="small" onClick={() => handleOpenEdit(prof)}>
+                                              <IconButton size="small" onClick={() => handleOpenEdit(prof)} title="Editar">
                                                 <EditIcon fontSize="small" />
                                               </IconButton>
-                                              <IconButton size="small" onClick={() => handleDeleteRow(prof)}>
+                                              <IconButton size="small" onClick={() => handleOpenNfDialog(prof)} title="Incluir NF">
+                                                <ReceiptLongIcon fontSize="small" />
+                                              </IconButton>
+                                              <IconButton size="small" onClick={() => handleDeleteRow(prof)} title="Excluir">
                                                 <DeleteIcon fontSize="small" />
                                               </IconButton>
                                             </TableCell>
@@ -782,27 +836,36 @@ export default function Dashboard({ userEmail, userName }) {
             )}
 
             {/* Dialog de novo/editar produção */}
-            <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
+            <Dialog open={dialogOpen} onClose={() => (savingDialog ? null : setDialogOpen(false))} maxWidth="md" fullWidth>
               <DialogTitle>{dialogMode === 'new' ? 'Nova Produção' : 'Editar Produção'}</DialogTitle>
               <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
-                <Box component="form" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {savingDialog && (
+                  <Box sx={{ mb: 2 }}>
+                    <LinearProgress />
+                    <Typography variant="body2" sx={{ mt: 1 }}>Carregando dados...</Typography>
+                  </Box>
+                )}
+                <Box component="form" sx={{ display: 'flex', flexDirection: 'column', gap: 2, opacity: savingDialog ? 0.6 : 1 }}>
                   <TextField
                     label="Projeto"
                     value={dialogGlobal.projeto || ''}
                     onChange={(e) => setDialogGlobal((prev) => ({ ...prev, projeto: e.target.value }))}
                     fullWidth
+                    disabled={savingDialog}
                   />
                   <TextField
                     label="Profissional"
                     value={dialogGlobal.profissional || ''}
                     onChange={(e) => setDialogGlobal((prev) => ({ ...prev, profissional: e.target.value }))}
                     fullWidth
+                    disabled={savingDialog}
                   />
                   <TextField
                     label="Vínculo"
                     value={dialogGlobal.vinculo || ''}
                     onChange={(e) => setDialogGlobal((prev) => ({ ...prev, vinculo: e.target.value }))}
                     fullWidth
+                    disabled={savingDialog}
                   />
                   <TextField
                     label="Data Pagamento"
@@ -810,6 +873,7 @@ export default function Dashboard({ userEmail, userName }) {
                     value={dialogGlobal.data_pagamento || ''}
                     onChange={(e) => setDialogGlobal((prev) => ({ ...prev, data_pagamento: e.target.value }))}
                     InputLabelProps={{ shrink: true }}
+                    disabled={savingDialog}
                   />
                   <TextField label="Mês" type="date" value={dialogGlobal.mes || ''} disabled InputLabelProps={{ shrink: true }} />
 
@@ -841,6 +905,7 @@ export default function Dashboard({ userEmail, userName }) {
                               }}
                               InputLabelProps={{ shrink: true }}
                               fullWidth
+                              disabled={savingDialog}
                             />
                           </TableCell>
                           <TableCell align="right">
@@ -859,6 +924,7 @@ export default function Dashboard({ userEmail, userName }) {
                                 });
                               }}
                               fullWidth
+                              disabled={savingDialog}
                             />
                           </TableCell>
                           <TableCell align="right">
@@ -875,7 +941,7 @@ export default function Dashboard({ userEmail, userName }) {
                                 });
                               }}
                               fullWidth
-                              disabled={autoCalcPay}
+                              disabled={autoCalcPay || savingDialog}
                             />
                           </TableCell>
                           <TableCell align="right">
@@ -892,11 +958,11 @@ export default function Dashboard({ userEmail, userName }) {
                                 });
                               }}
                               fullWidth
-                              disabled={autoCalcBill}
+                              disabled={autoCalcBill || savingDialog}
                             />
                           </TableCell>
                           <TableCell align="center">
-                            <IconButton onClick={() => setDialogRows((rows) => rows.filter((_, i) => i !== idx))}>
+                            <IconButton disabled={savingDialog} onClick={() => setDialogRows((rows) => rows.filter((_, i) => i !== idx))}>
                               <DeleteIcon />
                             </IconButton>
                           </TableCell>
@@ -907,6 +973,7 @@ export default function Dashboard({ userEmail, userName }) {
 
                   <Button
                     startIcon={<AddIcon />}
+                    disabled={savingDialog}
                     onClick={() =>
                       setDialogRows((rows) => [
                         ...rows,
@@ -931,10 +998,9 @@ export default function Dashboard({ userEmail, userName }) {
                     onChange={(e) => {
                       const v = parseFloat(e.target.value) || 0;
                       setDialogRatePay(v);
-                      if (autoCalcPay) {
-                        setDialogRows((rows) => recalcPagamentos(rows, v));
-                      }
+                      if (autoCalcPay) setDialogRows((rows) => recalcPagamentos(rows, v));
                     }}
+                    disabled={savingDialog}
                   />
                   <TextField
                     label="Valor Hora Faturado (R$)"
@@ -944,10 +1010,9 @@ export default function Dashboard({ userEmail, userName }) {
                     onChange={(e) => {
                       const v = parseFloat(e.target.value) || 0;
                       setDialogRateBill(v);
-                      if (autoCalcBill) {
-                        setDialogRows((rows) => recalcFaturamentos(rows, v));
-                      }
+                      if (autoCalcBill) setDialogRows((rows) => recalcFaturamentos(rows, v));
                     }}
+                    disabled={savingDialog}
                   />
 
                   <FormControlLabel
@@ -959,6 +1024,7 @@ export default function Dashboard({ userEmail, userName }) {
                           setAutoCalcPay(on);
                           if (on) setDialogRows((rows) => recalcPagamentos(rows, dialogRatePay));
                         }}
+                        disabled={savingDialog}
                       />
                     }
                     label="Recalcular Pagamento automaticamente"
@@ -972,6 +1038,7 @@ export default function Dashboard({ userEmail, userName }) {
                           setAutoCalcBill(on);
                           if (on) setDialogRows((rows) => recalcFaturamentos(rows, dialogRateBill));
                         }}
+                        disabled={savingDialog}
                       />
                     }
                     label="Recalcular Faturamento automaticamente"
@@ -982,6 +1049,7 @@ export default function Dashboard({ userEmail, userName }) {
                       <Checkbox
                         checked={dialogFlags.producao_validada}
                         onChange={(e) => setDialogFlags((f) => ({ ...f, producao_validada: e.target.checked }))}
+                        disabled={savingDialog}
                       />
                     }
                     label="Produção Validada"
@@ -991,6 +1059,7 @@ export default function Dashboard({ userEmail, userName }) {
                       <Checkbox
                         checked={dialogFlags.pagamento_lancado}
                         onChange={(e) => setDialogFlags((f) => ({ ...f, pagamento_lancado: e.target.checked }))}
+                        disabled={savingDialog}
                       />
                     }
                     label="Pagamento Lançado"
@@ -1000,6 +1069,7 @@ export default function Dashboard({ userEmail, userName }) {
                       <Checkbox
                         checked={dialogFlags.faturamento_validado}
                         onChange={(e) => setDialogFlags((f) => ({ ...f, faturamento_validado: e.target.checked }))}
+                        disabled={savingDialog}
                       />
                     }
                     label="Faturamento Validado"
@@ -1007,9 +1077,78 @@ export default function Dashboard({ userEmail, userName }) {
                 </Box>
               </DialogContent>
               <DialogActions>
-                <Button onClick={() => setDialogOpen(false)}>Cancelar</Button>
-                <Button onClick={handleSaveDialog} variant="contained">
-                  Salvar
+                <Button onClick={() => setDialogOpen(false)} disabled={savingDialog}>Cancelar</Button>
+                <Button onClick={handleSaveDialog} variant="contained" disabled={savingDialog}>
+                  {savingDialog ? 'Salvando...' : 'Salvar'}
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+            {/* Dialog de NF */}
+            <Dialog open={nfDialogOpen} onClose={() => (savingNf ? null : setNfDialogOpen(false))} maxWidth="sm" fullWidth>
+              <DialogTitle>Incluir NF de Serviço / Faturamento</DialogTitle>
+              <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
+                {savingNf && (
+                  <Box sx={{ mb: 2 }}>
+                    <LinearProgress />
+                    <Typography variant="body2" sx={{ mt: 1 }}>Carregando dados...</Typography>
+                  </Box>
+                )}
+                <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Data do Serviço</TableCell>
+                      <TableCell>NF Serviço</TableCell>
+                      <TableCell>NF Faturamento</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {nfRows.map((r, idx) => (
+                      <TableRow key={r.id || idx}>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <TextField type="date" value={r.data_servico} InputLabelProps={{ shrink: true }} disabled fullWidth />
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            value={r.nf_servico}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setNfRows((rows) => {
+                                const nr = [...rows];
+                                nr[idx].nf_servico = v;
+                                return nr;
+                              });
+                            }}
+                            placeholder="Número / link / referência"
+                            disabled={savingNf}
+                            fullWidth
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <TextField
+                            value={r.nf_faturamento}
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              setNfRows((rows) => {
+                                const nr = [...rows];
+                                nr[idx].nf_faturamento = v;
+                                return nr;
+                              });
+                            }}
+                            placeholder="Número / link / referência"
+                            disabled={savingNf}
+                            fullWidth
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setNfDialogOpen(false)} disabled={savingNf}>Cancelar</Button>
+                <Button onClick={handleSaveNf} variant="contained" disabled={savingNf}>
+                  {savingNf ? 'Salvando...' : 'Salvar'}
                 </Button>
               </DialogActions>
             </Dialog>
@@ -1072,6 +1211,18 @@ export default function Dashboard({ userEmail, userName }) {
           <Relatorios />
         )}
       </Box>
+
+      {/* Snackbar global */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={3000}
+        onClose={() => setSnackbar((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+      >
+        <Alert onClose={() => setSnackbar((s) => ({ ...s, open: false }))} severity={snackbar.severity} variant="filled">
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
