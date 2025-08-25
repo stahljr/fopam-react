@@ -48,11 +48,11 @@ const drawerWidth = 240;
 
 // Meses do menu lateral
 const monthsList = [
-  { value: '2025-08', label: 'Setembro 2025'},
-  { value: '2025-08', label: 'Agosto 2025' },
-  { value: '2025-07', label: 'Julho 2025' },
-  { value: '2025-06', label: 'Junho 2025' },
-  { value: '2025-05', label: 'Maio 2025' },
+  { value: '2025-09', label: 'Setembro'},
+  { value: '2025-08', label: 'Agosto' },
+  { value: '2025-07', label: 'Julho' },
+  { value: '2025-06', label: 'Junho' },
+  { value: '2025-05', label: 'Maio' },
 ];
 
 export default function Dashboard({ userEmail, userName }) {
