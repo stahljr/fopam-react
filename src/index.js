@@ -10,6 +10,21 @@ import axios from 'axios';
 // Base URL da API: em produção (Render) use REACT_APP_API_URL; em dev cai no localhost:5000
 axios.defaults.baseURL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
+// === Inclusão: interceptador para anexar token do Supabase em todas as requests ===
+axios.interceptors.request.use((config) => {
+  try {
+    // Supabase armazena a sessão no localStorage
+    const sb = JSON.parse(localStorage.getItem('supabase.auth.token') || 'null');
+    const token = sb?.currentSession?.access_token || sb?.access_token;
+    if (token) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch (err) {
+    console.warn('Não foi possível recuperar token do Supabase:', err);
+  }
+  return config;
+});
+
 // Tema personalizado utilizando a paleta da Serges (modo claro)
 const theme = createTheme({
   palette: {

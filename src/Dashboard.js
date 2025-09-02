@@ -81,6 +81,9 @@ export default function Dashboard({ userEmail, userName }) {
   const [dialogRateBill, setDialogRateBill] = useState(0);
   const [savingDialog, setSavingDialog] = useState(false);
 
+  // linhas (existentes) removidas no diálogo, para excluir no backend ao salvar
+  const [dialogDeletedIds, setDialogDeletedIds] = useState([]);
+
   // autocálculo DESLIGADO por padrão
   const [autoCalcPay, setAutoCalcPay] = useState(false);
   const [autoCalcBill, setAutoCalcBill] = useState(false);
@@ -102,6 +105,15 @@ export default function Dashboard({ userEmail, userName }) {
   const [nfDialogOpen, setNfDialogOpen] = useState(false);
   const [nfRows, setNfRows] = useState([]); // {id, data_servico, nf_servico, nf_faturamento}
   const [savingNf, setSavingNf] = useState(false);
+
+  // --- Confirmação de Delete (UI consistente) ---
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmTarget, setConfirmTarget] = useState(null);
+  /*
+    confirmTarget:
+      { type: 'single'|'group' } para a grade principal
+      { type: 'dialog-row', idx: number, id?: number } para excluir uma linha dentro do diálogo
+  */
 
   // feedback global
   const [snackbar, setSnackbar] = useState({ open: false, severity: 'success', message: '' });
@@ -191,11 +203,13 @@ export default function Dashboard({ userEmail, userName }) {
         const profKeys = Object.keys(pObj.professionals).sort();
         const profList = profKeys.map((profKey) => {
           const prObj = pObj.professionals[profKey];
+          // ordenar linhas por data_servico (mais antiga → mais nova)
+          const sortedRows = [...prObj.rows].sort((a, b) => new Date(a.data_servico) - new Date(b.data_servico));
           return {
             type: 'professional',
             profissional: profKey,
-            ids: prObj.rows.map((r) => r.id),
-            rows: prObj.rows,
+            ids: sortedRows.map((r) => r.id),
+            rows: sortedRows,
             totals: { ...prObj.totals },
             producao_validada: prObj.producao_validada,
             pagamento_lancado: prObj.pagamento_lancado,
@@ -295,13 +309,29 @@ export default function Dashboard({ userEmail, userName }) {
     setDialogRateBill(0);
     setAutoCalcPay(false);
     setAutoCalcBill(false);
+    setDialogDeletedIds([]); // reset
     setDialogOpen(true);
   };
 
-  // abrir diálogo editar
+  // abrir diálogo editar (ordenando linhas por data asc)
   const handleOpenEdit = (row) => {
     setDialogMode('edit');
-    const first = row.rows?.[0] || row;
+    const rowsArr = (row.rows || [row])
+      .map((r) => ({
+        id: r.id,
+        data_servico: r.data_servico,
+        horas: parseFloat(r.horas) || 0,
+        pagamento: parseFloat(r.pagamento) || 0,
+        faturamento: parseFloat(r.faturamento) || 0,
+        projeto: r.projeto || '',
+        profissional: r.profissional || '',
+        vinculo: r.vinculo || '',
+        data_pagamento: r.data_pagamento || '',
+        mes: r.mes || '',
+      }))
+      .sort((a, b) => new Date(a.data_servico) - new Date(b.data_servico));
+
+    const first = rowsArr[0] || {};
     setDialogGlobal({
       projeto: first.projeto || '',
       profissional: first.profissional || '',
@@ -309,14 +339,8 @@ export default function Dashboard({ userEmail, userName }) {
       data_pagamento: first.data_pagamento || '',
       mes: first.mes || '',
     });
-    const rowsArr = (row.rows || [row]).map((r) => ({
-      id: r.id,
-      data_servico: r.data_servico,
-      horas: parseFloat(r.horas) || 0,
-      pagamento: parseFloat(r.pagamento) || 0,
-      faturamento: parseFloat(r.faturamento) || 0,
-    }));
     setDialogRows(rowsArr);
+
     const hrs = rowsArr.reduce((sum, r) => sum + (parseFloat(r.horas) || 0), 0);
     const pag = rowsArr.reduce((sum, r) => sum + (parseFloat(r.pagamento) || 0), 0);
     const fat = rowsArr.reduce((sum, r) => sum + (parseFloat(r.faturamento) || 0), 0);
@@ -327,8 +351,10 @@ export default function Dashboard({ userEmail, userName }) {
       pagamento_lancado: row.pagamento_lancado ?? false,
       faturamento_validado: row.faturamento_validado ?? false,
     });
+
     setAutoCalcPay(false);
     setAutoCalcBill(false);
+    setDialogDeletedIds([]); // reset
     setDialogOpen(true);
   };
 
@@ -344,11 +370,18 @@ export default function Dashboard({ userEmail, userName }) {
     setNfDialogOpen(true);
   };
 
-  // salvar (new/edit)
+  // salvar (new/edit) COM EXCLUSÃO REAL de linhas removidas no diálogo
   const handleSaveDialog = async () => {
     try {
       setSavingDialog(true);
+
+      // 0) Se houver linhas marcadas para exclusão, remove-as no backend primeiro
+      if (dialogMode === 'edit' && dialogDeletedIds.length > 0) {
+        await axios.post('/delete_many', { ids: dialogDeletedIds });
+      }
+
       if (dialogMode === 'new') {
+        // 1) Inserções
         for (const r of dialogRows) {
           const payload = {
             projeto: dialogGlobal.projeto,
@@ -369,30 +402,46 @@ export default function Dashboard({ userEmail, userName }) {
           await axios.post('/add', payload);
         }
       } else {
+        // EDIT
+        const ids = dialogRows.filter(x => x.id).map(x => x.id);
+        // 1) Atualiza em lote os campos globais
+        const bulkFields = {
+          projeto: dialogGlobal.projeto,
+          profissional: dialogGlobal.profissional,
+          vinculo: dialogGlobal.vinculo,
+          data_pagamento: dialogGlobal.data_pagamento,
+          mes: dialogGlobal.mes,
+          producao_validada: dialogFlags.producao_validada,
+          pagamento_lancado: dialogFlags.pagamento_lancado,
+          faturamento_validado: dialogFlags.faturamento_validado,
+          valor_hora_pag: dialogRatePay,
+          valor_hora_fat: dialogRateBill,
+        };
+        if (ids.length) {
+          await axios.post('/update_many', { ids, fields: bulkFields });
+        }
+
+        // 2) Atualizações por linha existir / inserções novas
         for (const r of dialogRows) {
-          const fields = {
-            projeto: dialogGlobal.projeto,
-            profissional: dialogGlobal.profissional,
-            vinculo: dialogGlobal.vinculo,
-            data_servico: r.data_servico,
-            data_pagamento: dialogGlobal.data_pagamento,
-            mes: dialogGlobal.mes,
-            horas: r.horas,
-            pagamento: r.pagamento,
-            faturamento: r.faturamento,
-            producao_validada: dialogFlags.producao_validada,
-            pagamento_lancado: dialogFlags.pagamento_lancado,
-            faturamento_validado: dialogFlags.faturamento_validado,
-          };
           if (r.id) {
-            for (const [field, value] of Object.entries(fields)) {
-              await axios.post('/update', { id: r.id, field, value });
-            }
-            await axios.post('/update', { id: r.id, field: 'valor_hora_pag', value: dialogRatePay });
-            await axios.post('/update', { id: r.id, field: 'valor_hora_fat', value: dialogRateBill });
+            await axios.post('/update', { id: r.id, field: 'data_servico', value: r.data_servico });
+            await axios.post('/update', { id: r.id, field: 'horas', value: r.horas });
+            await axios.post('/update', { id: r.id, field: 'pagamento', value: r.pagamento });
+            await axios.post('/update', { id: r.id, field: 'faturamento', value: r.faturamento });
           } else {
             await axios.post('/add', {
-              ...fields,
+              projeto: dialogGlobal.projeto,
+              profissional: dialogGlobal.profissional,
+              vinculo: dialogGlobal.vinculo,
+              data_servico: r.data_servico,
+              data_pagamento: dialogGlobal.data_pagamento,
+              mes: dialogGlobal.mes,
+              horas: r.horas,
+              pagamento: r.pagamento,
+              faturamento: r.faturamento,
+              producao_validada: dialogFlags.producao_validada,
+              pagamento_lancado: dialogFlags.pagamento_lancado,
+              faturamento_validado: dialogFlags.faturamento_validado,
               valor_hora_pag: dialogRatePay,
               valor_hora_fat: dialogRateBill,
             });
@@ -408,6 +457,7 @@ export default function Dashboard({ userEmail, userName }) {
       setSnackbar({ open: true, severity: 'error', message: 'Falha ao salvar. Tente novamente.' });
     } finally {
       setSavingDialog(false);
+      setDialogDeletedIds([]);
     }
   };
 
@@ -430,15 +480,15 @@ export default function Dashboard({ userEmail, userName }) {
     }
   };
 
-  // atualizar flags booleanos
+  // atualizar flags booleanos (mantido)
   const handleBoolChange = async (idOrObj, field, value) => {
     try {
       if (typeof idOrObj === 'object' && Array.isArray(idOrObj.ids)) {
-        await Promise.all(idOrObj.ids.map((rid) => axios.post('/update', { id: rid, field, value })));
-        await fetchData(selectedMonth, true); // preserva expansões
+        // em lote
+        await axios.post('/update_many', { ids: idOrObj.ids, fields: { [field]: value } });
+        await fetchData(selectedMonth, true);
       } else {
         await axios.post('/update', { id: idOrObj, field, value });
-        // update otimista e depois refetch preservando expansão
         setData((prev) => prev.map((r) => (r.id === idOrObj ? { ...r, [field]: value } : r)));
         await fetchData(selectedMonth, true);
       }
@@ -449,22 +499,53 @@ export default function Dashboard({ userEmail, userName }) {
     }
   };
 
-  // excluir
-  const handleDeleteRow = async (row) => {
-    if (!window.confirm('Deseja excluir este registro?')) return;
+  // preparar confirmação de exclusão (UI) na grade principal
+  const requestDelete = (row) => {
+    const ids = row.ids && Array.isArray(row.ids) ? row.ids : (row.id ? [row.id] : []);
+    if (!ids.length) return;
+    setConfirmTarget({ type: ids.length > 1 ? 'group' : 'single', ids });
+    setConfirmOpen(true);
+  };
+
+  // preparar confirmação de excluir linha dentro do diálogo
+  const requestDeleteInDialog = (idx, row) => {
+    setConfirmTarget({ type: 'dialog-row', idx, id: row?.id || null });
+    setConfirmOpen(true);
+  };
+
+  const doDelete = async () => {
+    const tgt = confirmTarget;
+    setConfirmOpen(false);
+    if (!tgt) return;
+
+    // Caso: excluir uma linha dentro do diálogo
+    if (tgt.type === 'dialog-row') {
+      setDialogRows((rows) => {
+        const newRows = rows.filter((_, i) => i !== tgt.idx);
+        return newRows;
+      });
+      if (tgt.id) {
+        setDialogDeletedIds((prev) => Array.from(new Set([...prev, tgt.id])));
+      }
+      setSnackbar({ open: true, severity: 'info', message: 'Linha marcada para exclusão. Ela será removida ao salvar.' });
+      setConfirmTarget(null);
+      return;
+    }
+
+    // Casos na grade principal: single/group
     try {
-      if (row.ids && Array.isArray(row.ids)) {
-        for (const rid of row.ids) {
-          await axios.post('/delete', { id: rid });
-        }
-      } else if (row.id) {
-        await axios.post('/delete', { id: row.id });
+      if (tgt.ids?.length === 1) {
+        await axios.post('/delete', { id: tgt.ids[0] });
+      } else if (tgt.ids?.length > 1) {
+        await axios.post('/delete_many', { ids: tgt.ids });
       }
       setSnackbar({ open: true, severity: 'success', message: 'Registro(s) excluído(s).' });
       await fetchData(selectedMonth, true);
     } catch (err) {
       console.error('Erro ao excluir registro:', err);
       setSnackbar({ open: true, severity: 'error', message: 'Falha ao excluir.' });
+    } finally {
+      setConfirmTarget(null);
     }
   };
 
@@ -805,7 +886,7 @@ export default function Dashboard({ userEmail, userName }) {
                                               <IconButton size="small" onClick={() => handleOpenNfDialog(prof)} title="Incluir NF">
                                                 <ReceiptLongIcon fontSize="small" />
                                               </IconButton>
-                                              <IconButton size="small" onClick={() => handleDeleteRow(prof)} title="Excluir">
+                                              <IconButton size="small" onClick={() => requestDelete(prof)} title="Excluir">
                                                 <DeleteIcon fontSize="small" />
                                               </IconButton>
                                             </TableCell>
@@ -844,6 +925,14 @@ export default function Dashboard({ userEmail, userName }) {
                     <Typography variant="body2" sx={{ mt: 1 }}>Carregando dados...</Typography>
                   </Box>
                 )}
+
+                {/* Aviso quando há linhas marcadas para exclusão */}
+                {dialogMode === 'edit' && dialogDeletedIds.length > 0 && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    {dialogDeletedIds.length} linha(s) serão excluídas ao salvar.
+                  </Alert>
+                )}
+
                 <Box component="form" sx={{ display: 'flex', flexDirection: 'column', gap: 2, opacity: savingDialog ? 0.6 : 1 }}>
                   <TextField
                     label="Projeto"
@@ -899,7 +988,8 @@ export default function Dashboard({ userEmail, userName }) {
                                 setDialogRows((rows) => {
                                   const nr = [...rows];
                                   nr[idx].data_servico = v;
-                                  return nr;
+                                  // manter sempre ordenado (mais antigo → mais novo)
+                                  return nr.sort((a, b) => new Date(a.data_servico) - new Date(b.data_servico));
                                 });
                               }}
                               InputLabelProps={{ shrink: true }}
@@ -961,7 +1051,11 @@ export default function Dashboard({ userEmail, userName }) {
                             />
                           </TableCell>
                           <TableCell align="center">
-                            <IconButton disabled={savingDialog} onClick={() => setDialogRows((rows) => rows.filter((_, i) => i !== idx))}>
+                            <IconButton
+                              disabled={savingDialog}
+                              onClick={() => requestDeleteInDialog(idx, r)}
+                              title="Remover linha"
+                            >
                               <DeleteIcon />
                             </IconButton>
                           </TableCell>
@@ -974,16 +1068,19 @@ export default function Dashboard({ userEmail, userName }) {
                     startIcon={<AddIcon />}
                     disabled={savingDialog}
                     onClick={() =>
-                      setDialogRows((rows) => [
-                        ...rows,
-                        {
-                          id: null,
-                          data_servico: dialogGlobal.data_pagamento || `${selectedMonth}-01`,
-                          horas: 0,
-                          pagamento: 0,
-                          faturamento: 0,
-                        },
-                      ])
+                      setDialogRows((rows) => {
+                        const nr = [
+                          ...rows,
+                          {
+                            id: null,
+                            data_servico: dialogGlobal.data_pagamento || `${selectedMonth}-01`,
+                            horas: 0,
+                            pagamento: 0,
+                            faturamento: 0,
+                          },
+                        ];
+                        return nr.sort((a, b) => new Date(a.data_servico) - new Date(b.data_servico));
+                      })
                     }
                   >
                     Adicionar data
@@ -1203,6 +1300,24 @@ export default function Dashboard({ userEmail, userName }) {
                 <Button onClick={handleSaveProfile} variant="contained" disabled={savingProfile}>
                   Salvar
                 </Button>
+              </DialogActions>
+            </Dialog>
+
+            {/* Diálogo de Confirmação de Exclusão (grade e diálogo) */}
+            <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+              <DialogTitle>Confirmar exclusão</DialogTitle>
+              <DialogContent dividers>
+                <Typography>
+                  {confirmTarget?.type === 'group'
+                    ? 'Deseja excluir todas as linhas deste grupo?'
+                    : confirmTarget?.type === 'dialog-row'
+                      ? 'Remover esta linha? Ela será excluída do banco ao salvar.'
+                      : 'Deseja excluir este registro?'}
+                </Typography>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setConfirmOpen(false)}>Cancelar</Button>
+                <Button color="error" variant="contained" onClick={doDelete}>Excluir</Button>
               </DialogActions>
             </Dialog>
           </>
