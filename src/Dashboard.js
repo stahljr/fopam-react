@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Relatorios from './Relatorios';
 import Indicadores from './Indicadores';
+import AcompanhamentoCassi from './AcompanhamentoCassi';
 import {
   Box,
   Drawer,
@@ -56,7 +57,7 @@ const monthsList = [
 ];
 
 export default function Dashboard({ userEmail, userName }) {
-  // controla qual painel interno mostrar: "fopam" | "relatorios" | "indicadores"
+  // controla qual painel interno mostrar: "fopam" | "relatorios" | "indicadores" | "cassi"
   const [painelAtivo, setPainelAtivo] = useState('fopam');
 
   // --- Estados do FOPAM ---
@@ -719,6 +720,11 @@ export default function Dashboard({ userEmail, userName }) {
           <ListItemButton selected={painelAtivo === 'indicadores'} onClick={() => setPainelAtivo('indicadores')}>
             <ListItemText primary="Indicadores" />
           </ListItemButton>
+
+          {/* Novo item de menu */}
+          <ListItemButton selected={painelAtivo === 'cassi'} onClick={() => setPainelAtivo('cassi')}>
+            <ListItemText primary="Acompanhamento CASSI" />
+          </ListItemButton>
         </List>
       </Drawer>
 
@@ -1323,8 +1329,10 @@ export default function Dashboard({ userEmail, userName }) {
           </>
         ) : painelAtivo === 'relatorios' ? (
           <Relatorios />
-        ) : (
+        ) : painelAtivo === 'indicadores' ? (
           <Indicadores />
+        ) : (
+          <AcompanhamentoCassi />
         )}
       </Box>
 
