@@ -3,13 +3,14 @@ import React, { useEffect, useMemo, useState } from "react";
 import {
   Box, Paper, Typography, Stack, TextField, MenuItem, Button, IconButton,
   Table, TableHead, TableRow, TableCell, TableBody, Tooltip, Snackbar, Alert,
-  Divider, Tabs, Tab, LinearProgress, Checkbox, Switch
+  Divider, Tabs, Tab, LinearProgress, Checkbox, Switch, Chip
 } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import SaveIcon from "@mui/icons-material/Save";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import EditIcon from "@mui/icons-material/Edit";
+import CloseIcon from "@mui/icons-material/Close";
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis,
   Tooltip as RTooltip, CartesianGrid, Legend, LabelList
@@ -141,7 +142,6 @@ function ResumoCaptador({ setSnack }) {
 
   const save = async () => {
     try {
-      // mantém contrato atual: quando geral, envia só rows; quando fallback, backend ignora
       await axios.post("/cassi/resumo/upsert", { rows });
       setSnack({ open:true, type:"success", text:"Resumo salvo!" });
       await load();
@@ -586,7 +586,7 @@ function SerieMensal({ kind, title, keysDef, colors, setSnack }) {
   );
 }
 
-// ===== Dependências Semanais  =====
+// ===== Dependências Semanais =====
 function DependenciasSemanais({ setSnack }) {
   const [ano, setAno] = useState(2025);
   const [meses, setMeses] = useState(["09","10","11","12"]);
@@ -724,7 +724,7 @@ function DependenciasSemanais({ setSnack }) {
   );
 }
 
-// ===== Acompanhamento Diário =====
+// ===== Acompanhamento Diário (EDITA EM BUFFER E SALVA EM LOTE) =====
 function AcompanhamentoDiario({ setSnack }) {
   const [editMode, setEditMode] = useState(false);
   const [dateStart, setDateStart] = useState(() => {
@@ -737,9 +737,27 @@ function AcompanhamentoDiario({ setSnack }) {
   });
 
   const [diarioLoading, setDiarioLoading] = useState(false);
-  const [rows, setRows] = useState([]); // [{data, uf, valor}]
-  const [weekly, setWeekly] = useState([]); // [{week,total}]
+  const [saving, setSaving] = useState(false);
 
+  // dados "originais" vindos do backend (lista)
+  const [rows, setRows] = useState([]); // [{data, uf, valor}]
+
+  // mapa original (para diff): uf -> { dateISO: number|null }
+  const originalMap = useMemo(() => {
+    const map = {};
+    for (const uf of UFS) map[uf] = {};
+    for (const r of (rows || [])) {
+      const uf = (r.uf || "").toUpperCase();
+      if (!map[uf]) map[uf] = {};
+      map[uf][r.data] = (r.valor === "" || r.valor == null) ? null : Number(r.valor);
+    }
+    return map;
+  }, [rows]);
+
+  // draft (buffer de edição): uf -> { dateISO: number|null|"" }
+  const [draft, setDraft] = useState({});
+
+  // colunas de datas no período
   const colDates = useMemo(()=>{
     const a = new Date(dateStart), b = new Date(dateEnd);
     const out = [];
@@ -747,16 +765,8 @@ function AcompanhamentoDiario({ setSnack }) {
     return out;
   }, [dateStart, dateEnd]);
 
-  const pivot = useMemo(()=>{
-    const map = {};
-    for(const uf of UFS) map[uf] = {};
-    for(const r of (rows||[])){
-      const uf = (r.uf||"").toUpperCase();
-      if(!map[uf]) map[uf] = {};
-      map[uf][r.data] = (r.valor===""||r.valor==null)? null : Number(r.valor);
-    }
-    return map;
-  }, [rows]);
+  // carrega dados + semanal
+  const [weekly, setWeekly] = useState([]);
 
   const load = async ()=>{
     if(!dateStart || !dateEnd) return;
@@ -778,22 +788,105 @@ function AcompanhamentoDiario({ setSnack }) {
 
   useEffect(()=>{ load(); loadWeekly(); /* eslint-disable-next-line */ }, [dateStart, dateEnd]);
 
-  const saveCell = async (uf, dataISO, value) => {
-    try {
-      await axios.post("/cassi/diario/upsert", {
-        data: dataISO, uf, valor: (value===""? null : Number(value))
-      });
-      setRows(prev=>{
-        const idx = prev.findIndex(x=>x.uf===uf && x.data===dataISO);
-        const v = (value===""? null : Number(value));
-        if (idx>=0){
-          const n=[...prev]; n[idx]={...n[idx], valor:v}; return n;
+  // Quando entra em modo edição, inicializa draft a partir do originalMap (somente período atual)
+  useEffect(()=>{
+    if (editMode) {
+      const init = {};
+      for (const uf of UFS) {
+        init[uf] = {};
+        for (const d of colDates) {
+          const orig = originalMap?.[uf]?.[d];
+          init[uf][d] = (orig === undefined ? null : orig);
         }
-        return [...prev, { data:dataISO, uf, valor:v }];
-      });
-    } catch {
-      setSnack({ open:true, type:"error", text:"Falha ao salvar célula." });
+      }
+      setDraft(init);
+    } else {
+      setDraft({});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editMode, originalMap, colDates.join("|")]);
+
+  // há alterações?
+  const hasChanges = useMemo(()=>{
+    if (!editMode) return false;
+    for (const uf of UFS) {
+      const origRow = originalMap[uf] || {};
+      const draftRow = draft[uf] || {};
+      for (const d of colDates) {
+        const o = (origRow[d] === undefined ? null : origRow[d]);
+        const v = (draftRow[d] === undefined ? null : draftRow[d]);
+        // tratar vazio "" como null
+        const oo = (o === "" ? null : o);
+        const vv = (v === "" ? null : v);
+        if (oo !== vv) return true;
+      }
+    }
+    return false;
+  }, [editMode, originalMap, draft, colDates]);
+
+  const onChangeCell = (uf, dateISO, raw) => {
+    setDraft(prev => {
+      const copy = { ...(prev || {}) };
+      const row = { ...(copy[uf] || {}) };
+      row[dateISO] = raw === "" ? "" : Number(raw);
+      copy[uf] = row;
+      return copy;
+    });
+  };
+
+  const discard = async () => {
+    setDraft({});
+    setEditMode(false);
+    await load();
+    await loadWeekly();
+  };
+
+  const save = async () => {
+    if (!hasChanges) {
+      setSnack({ open:true, type:"info", text:"Nenhuma alteração para salvar." });
+      return;
+    }
+    setSaving(true);
+    try {
+      const payloads = [];
+      for (const uf of UFS) {
+        const origRow = originalMap[uf] || {};
+        const draftRow = draft[uf] || {};
+        for (const d of colDates) {
+          const o = (origRow[d] === undefined ? null : origRow[d]);
+          const v = (draftRow[d] === undefined ? null : draftRow[d]);
+          const oo = (o === "" ? null : o);
+          const vv = (v === "" ? null : v);
+          if (oo !== vv) {
+            payloads.push({ data: d, uf, valor: vv });
+          }
+        }
+      }
+
+      // salva em "lote" com Promise.all (mantendo o endpoint atual /cassi/diario/upsert)
+      await Promise.all(
+        payloads.map(p => axios.post("/cassi/diario/upsert", p))
+      );
+
+      setSnack({ open:true, type:"success", text:"Alterações salvas!" });
+      await load();
+      await loadWeekly();
+      setEditMode(false);
+    } catch {
+      setSnack({ open:true, type:"error", text:"Falha ao salvar alterações." });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Tabela usa draft quando em edição; senão, usa originalMap
+  const getCellValue = (uf, d) => {
+    if (editMode) {
+      const v = draft?.[uf]?.[d];
+      return v ?? "";
+    }
+    const o = originalMap?.[uf]?.[d];
+    return (o == null ? null : o);
   };
 
   return (
@@ -809,18 +902,42 @@ function AcompanhamentoDiario({ setSnack }) {
           onChange={(e)=>setDateEnd(e.target.value)}
           InputLabelProps={{ shrink:true }} size="small"
         />
-        <Button startIcon={<RefreshIcon />} onClick={()=>{ load(); loadWeekly(); }} disabled={diarioLoading}>
-          {diarioLoading ? "Carregando..." : "Atualizar"}
+        <Button startIcon={<RefreshIcon />} onClick={()=>{ load(); loadWeekly(); }} disabled={diarioLoading || saving}>
+          {(diarioLoading || saving) ? "Carregando..." : "Atualizar"}
         </Button>
         <Box sx={{ flex:1 }} />
-        <Stack direction="row" alignItems="center" spacing={1}>
+        {editMode && (
+          <>
+            {hasChanges && (
+              <Chip label="Alterações não salvas" color="warning" size="small" sx={{ mr: 1 }} />
+            )}
+            <Button
+              variant="outlined"
+              startIcon={<CloseIcon />}
+              onClick={discard}
+              disabled={saving}
+              sx={{ mr: 1 }}
+            >
+              Descartar
+            </Button>
+            <Button
+              variant="contained"
+              startIcon={<SaveIcon />}
+              onClick={save}
+              disabled={!hasChanges || saving}
+            >
+              {saving ? "Salvando..." : "Salvar"}
+            </Button>
+          </>
+        )}
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ ml: editMode ? 1 : 0 }}>
           <EditIcon fontSize="small" />
           <Switch checked={editMode} onChange={(e)=>setEditMode(e.target.checked)} />
           <Typography variant="body2">{editMode ? "Modo edição" : "Somente leitura"}</Typography>
         </Stack>
       </Stack>
 
-      {diarioLoading ? <LinearProgress /> : (
+      {(diarioLoading && !editMode) ? <LinearProgress /> : (
         <>
           <Box sx={{ overflowX:"auto" }}>
             <Table size="small" sx={{ minWidth: Math.max(1000, colDates.length*110) }}>
@@ -839,14 +956,14 @@ function AcompanhamentoDiario({ setSnack }) {
                   <TableRow key={uf} hover>
                     <TableCell sx={{ fontWeight: uf==="DELTA" ? 700 : 400 }}>{uf}</TableCell>
                     {colDates.map((d)=>{
-                      const v = pivot?.[uf]?.[d] ?? null;
+                      const v = getCellValue(uf, d);
                       return (
                         <TableCell key={`${uf}-${d}`} align="right">
                           {editMode ? (
                             <TextField
                               type="number"
                               value={v ?? ""}
-                              onChange={(e)=>saveCell(uf, d, e.target.value)}
+                              onChange={(e)=>onChangeCell(uf, d, e.target.value)}
                               size="small"
                               inputProps={{ step:"any", style:{ textAlign:"right" }}}
                               sx={{ minWidth: 100 }}
