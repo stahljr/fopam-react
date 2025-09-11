@@ -803,7 +803,7 @@ function AcompanhamentoDiario({ setSnack }) {
     } else {
       setDraft({});
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    
   }, [editMode, originalMap, colDates.join("|")]);
 
   // há alterações?
