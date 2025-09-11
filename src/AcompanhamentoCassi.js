@@ -879,7 +879,7 @@ function AcompanhamentoDiario({ setSnack }) {
     }
   };
 
-  // Tabela usa draft quando em edição; senão, usa originalMap
+  // Tabela usa draft quando em edição; senão, usa originalMapa
   const getCellValue = (uf, d) => {
     if (editMode) {
       const v = draft?.[uf]?.[d];
