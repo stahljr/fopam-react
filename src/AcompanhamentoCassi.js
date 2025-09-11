@@ -36,6 +36,19 @@ const defaultResumoRow = () => ({
 const EPS_KEYS = ["previstos","realizados","no_show"];
 const GUIAS_KEYS = ["exames_realizados","guias_faturadas","gap","guias_a_lancar","sfat"];
 
+// Diário
+const UFS = [
+  "DELTA","AC","AM","AP","BA","CE","ES","GO","MA","MG","MS","MT",
+  "PA","PE","PI","PR","RJ","RN","RO","RR","RS","SP","TO"
+];
+const COLORS = [
+  "#1f77b4","#ff7f0e","#2ca02c","#d62728","#9467bd",
+  "#8c564b","#e377c2","#7f7f7f","#bcbd22","#17becf",
+  "#003f5c","#58508d","#bc5090","#ff6361","#ffa600"
+];
+const iso = (d) => d.toISOString().slice(0,10);
+const addDays = (d, n) => { const x=new Date(d); x.setDate(x.getDate()+n); return x; };
+
 // ===== Componente Principal =====
 export default function AcompanhamentoCassi() {
   const [tab, setTab] = useState(0);
@@ -52,6 +65,7 @@ export default function AcompanhamentoCassi() {
           <Tab label="Andamento EPS" />
           <Tab label="Guias" />
           <Tab label="Dependências (Semanas)" />
+          <Tab label="Acompanhamento Diário" />
         </Tabs>
       </Paper>
 
@@ -60,6 +74,7 @@ export default function AcompanhamentoCassi() {
       {tab === 2 && <SerieMensal kind="eps" title="Andamento EPS" keysDef={EPS_KEYS} colors={["#1f77b4","#ff7f0e","#2ca02c"]} setSnack={setSnack} />}
       {tab === 3 && <SerieMensal kind="guias" title="Guias" keysDef={GUIAS_KEYS} colors={["#1f77b4","#ff7f0e","#2ca02c","#17becf","#9467bd"]} setSnack={setSnack} />}
       {tab === 4 && <DependenciasSemanais setSnack={setSnack} />}
+      {tab === 5 && <AcompanhamentoDiario setSnack={setSnack} />}
 
       <Snackbar
         open={snack.open}
@@ -72,15 +87,12 @@ export default function AcompanhamentoCassi() {
   );
 }
 
-// ===== Resumo por Captador =====
+// ===== Resumo por Captador (GERAL com fallback para mês atual) =====
 function ResumoCaptador({ setSnack }) {
-  const today = new Date();
-  const [ano, setAno] = useState(today.getFullYear());
-  const [mes, setMes] = useState(String(today.getMonth()+1).padStart(2,"0"));
-
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [editMode, setEditMode] = useState(false);
+  const [fallbackInfo, setFallbackInfo] = useState(null); // string | null
 
   const totals = useMemo(()=>{
     const acc = {aberto:0, agendado:0, realizado:0, atendido:0, no_show:0, andamento:0, total:0};
@@ -96,13 +108,25 @@ function ResumoCaptador({ setSnack }) {
     return acc;
   },[rows]);
 
-  const periodoStr = `${ano}-${mes}`;
-
   const load = async () => {
     setLoading(true);
+    setFallbackInfo(null);
     try {
-      const r = await axios.get("/cassi/resumo", { params: { mes: periodoStr }});
-      setRows(Array.isArray(r.data) ? r.data : []);
+      // 1) tenta GERAL (sem params)
+      const r1 = await axios.get("/cassi/resumo");
+      const arr1 = Array.isArray(r1.data) ? r1.data : [];
+      if (arr1.length > 0) {
+        setRows(arr1);
+        return;
+      }
+
+      // 2) fallback: mês atual (para não ficar sem dados)
+      const now = new Date();
+      const mes = String(now.getMonth()+1).padStart(2,"0");
+      const periodoStr = `${now.getFullYear()}-${mes}`;
+      const r2 = await axios.get("/cassi/resumo", { params: { mes: periodoStr }});
+      setRows(Array.isArray(r2.data) ? r2.data : []);
+      setFallbackInfo(`Sem suporte a "geral" no backend; exibindo mês ${mesesNomes[Number(mes)-1].toUpperCase()}/${now.getFullYear()}.`);
     } catch {
       setRows([]);
     } finally {
@@ -110,14 +134,15 @@ function ResumoCaptador({ setSnack }) {
     }
   };
 
-  useEffect(()=>{ load(); /* eslint-disable-next-line */ }, [ano, mes]);
+  useEffect(()=>{ load(); }, []);
 
   const addRow = () => setRows(prev => [...prev, defaultResumoRow()]);
   const delRow = (idx) => setRows(prev => prev.filter((_,i)=>i!==idx));
 
   const save = async () => {
     try {
-      await axios.post("/cassi/resumo/upsert", { mes: periodoStr, rows });
+      // mantém contrato atual: quando geral, envia só rows; quando fallback, backend ignora
+      await axios.post("/cassi/resumo/upsert", { rows });
       setSnack({ open:true, type:"success", text:"Resumo salvo!" });
       await load();
       setEditMode(false);
@@ -128,13 +153,7 @@ function ResumoCaptador({ setSnack }) {
 
   return (
     <Paper sx={{ p: 2 }}>
-      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2, flexWrap: "wrap" }}>
-        <TextField select label="Ano" value={ano} onChange={(e)=>setAno(Number(e.target.value))} sx={{ width: 140 }}>
-          {anosList.map(y=><MenuItem key={y} value={y}>{y}</MenuItem>)}
-        </TextField>
-        <TextField select label="Mês" value={mes} onChange={(e)=>setMes(e.target.value)} sx={{ width: 160 }}>
-          {mesesOpt.map(m=><MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>)}
-        </TextField>
+      <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 1, flexWrap: "wrap" }}>
         <Box sx={{ flex:1 }} />
         <Stack direction="row" alignItems="center" spacing={1}>
           <EditIcon fontSize="small" />
@@ -155,6 +174,12 @@ function ResumoCaptador({ setSnack }) {
           </>
         )}
       </Stack>
+
+      {fallbackInfo && (
+        <Typography variant="caption" color="text.secondary" sx={{ mb: 1, display:"block" }}>
+          {fallbackInfo}
+        </Typography>
+      )}
 
       {loading ? (
         <Box sx={{ p: 2 }}><LinearProgress /><Typography variant="body2" sx={{ mt: 1 }}>Carregando…</Typography></Box>
@@ -195,9 +220,9 @@ function ResumoCaptador({ setSnack }) {
                     <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
                       {editMode ? (
                         <TextField
-                          value={r[k] ?? 0}
+                          value={r[k] ?? ""}
                           onChange={(e)=>setRows(prev=>{
-                            const val = Number(e.target.value) || 0;
+                            const val = e.target.value === "" ? "" : Number(e.target.value);
                             const n=[...prev];
                             n[idx] = { ...n[idx], [k]: val };
                             return n;
@@ -372,27 +397,30 @@ function MetaMensal({ setSnack }) {
                           <Stack direction="row" spacing={2} justifyContent="space-between">
                             <TextField
                               size="small" type="number" sx={{ width: 70 }}
-                              value={cell.meta} onChange={(e)=>setRows(prev=>{
+                              value={cell.meta}
+                              onChange={(e)=>setRows(prev=>{
                                 const n=[...prev]; const metas={...(n[idx].metas||{})};
-                                metas[m]={ ...(metas[m]||{}), meta: Number(e.target.value) };
+                                metas[m]={ ...(metas[m]||{}), meta: e.target.value === "" ? "" : Number(e.target.value) };
                                 n[idx]={...n[idx], metas}; return n;
                               })}
                               inputProps={{ step:"any" }}
                             />
                             <TextField
                               size="small" type="number" sx={{ width: 90 }}
-                              value={cell.realizado} onChange={(e)=>setRows(prev=>{
+                              value={cell.realizado}
+                              onChange={(e)=>setRows(prev=>{
                                 const n=[...prev]; const metas={...(n[idx].metas||{})};
-                                metas[m]={ ...(metas[m]||{}), realizado: Number(e.target.value) };
+                                metas[m]={ ...(metas[m]||{}), realizado: e.target.value === "" ? "" : Number(e.target.value) };
                                 n[idx]={...n[idx], metas}; return n;
                               })}
                               inputProps={{ step:"any" }}
                             />
                             <TextField
                               size="small" type="number" sx={{ width: 90 }}
-                              value={cell.diferenca} onChange={(e)=>setRows(prev=>{
+                              value={cell.diferenca}
+                              onChange={(e)=>setRows(prev=>{
                                 const n=[...prev]; const metas={...(n[idx].metas||{})};
-                                metas[m]={ ...(metas[m]||{}), diferenca: Number(e.target.value) };
+                                metas[m]={ ...(metas[m]||{}), diferenca: e.target.value === "" ? "" : Number(e.target.value) };
                                 n[idx]={...n[idx], metas}; return n;
                               })}
                               inputProps={{ step:"any" }}
@@ -463,7 +491,7 @@ function SerieMensal({ kind, title, keysDef, colors, setSnack }) {
   const handleSet = (m, k, val) => {
     setData(prev => {
       const month = { ...(prev[m] || {}) };
-      month[k] = Number(val) || 0;
+      month[k] = val === "" ? "" : Number(val);
       return { ...prev, [m]: month };
     });
   };
@@ -471,7 +499,10 @@ function SerieMensal({ kind, title, keysDef, colors, setSnack }) {
   const chartData = useMemo(()=>{
     return mesesOpt.map(m => {
       const row = { mes: m.label.toUpperCase() };
-      keysDef.forEach(k => row[k] = Number(data?.[m.value]?.[k] ?? 0));
+      keysDef.forEach(k => {
+        const v = data?.[m.value]?.[k];
+        row[k] = (v === "" || v === null || v === undefined) ? null : Number(v);
+      });
       return row;
     });
   }, [data, keysDef]);
@@ -519,7 +550,7 @@ function SerieMensal({ kind, title, keysDef, colors, setSnack }) {
                       <TextField
                         size="small"
                         type="number"
-                        value={data?.[m.value]?.[k] ?? 0}
+                        value={data?.[m.value]?.[k] ?? ""}
                         onChange={(e)=>handleSet(m.value, k, e.target.value)}
                         inputProps={{ step:"any" }}
                         sx={{ width: 140 }}
@@ -544,7 +575,7 @@ function SerieMensal({ kind, title, keysDef, colors, setSnack }) {
             <RTooltip />
             <Legend />
             {keysDef.map((k, idx) => (
-              <Line key={k} type="monotone" dataKey={k} stroke={colors[idx % colors.length]} strokeWidth={2} dot>
+              <Line key={k} type="monotone" dataKey={k} stroke={colors[idx % colors.length]} strokeWidth={2} dot connectNulls={false}>
                 <LabelList dataKey={k} position="top" formatter={(v)=> (v==null ? "" : v)} />
               </Line>
             ))}
@@ -555,7 +586,7 @@ function SerieMensal({ kind, title, keysDef, colors, setSnack }) {
   );
 }
 
-// ===== Dependências Semanais =====
+// ===== Dependências Semanais  =====
 function DependenciasSemanais({ setSnack }) {
   const [ano, setAno] = useState(2025);
   const [meses, setMeses] = useState(["09","10","11","12"]);
@@ -592,7 +623,7 @@ function DependenciasSemanais({ setSnack }) {
   const setWeekVal = (m, w, val) => {
     setData(prev => {
       const month = { ...(prev[m] || {}) };
-      month[w] = Number(val) || 0;
+      month[w] = (val === "" ? "" : Number(val));
       return { ...prev, [m]: month };
     });
   };
@@ -603,7 +634,8 @@ function DependenciasSemanais({ setSnack }) {
       for (let w=1; w<=5; w++) {
         const key = String(w);
         const label = `${mesesNomes[Number(m)-1]} S${w}`;
-        items.push({ periodo: label.toUpperCase(), valor: Number(data?.[m]?.[key] ?? 0) });
+        const v = data?.[m]?.[key];
+        items.push({ periodo: label.toUpperCase(), valor: (v===""||v==null? null : Number(v)) });
       }
     });
     return items;
@@ -658,7 +690,7 @@ function DependenciasSemanais({ setSnack }) {
                     <TextField
                       size="small"
                       type="number"
-                      value={data?.[m]?.[String(w)] ?? 0}
+                      value={data?.[m]?.[String(w)] ?? ""}
                       onChange={(e)=>setWeekVal(m, String(w), e.target.value)}
                       inputProps={{ step:"any" }}
                     />
@@ -679,7 +711,7 @@ function DependenciasSemanais({ setSnack }) {
                   <YAxis />
                   <RTooltip />
                   <Legend />
-                  <Line type="monotone" dataKey="valor" stroke="#1f77b4" strokeWidth={2} dot>
+                  <Line type="monotone" dataKey="valor" stroke="#1f77b4" strokeWidth={2} dot connectNulls={false}>
                     <LabelList dataKey="valor" position="top" formatter={(v)=> (v==null?"":v)} />
                   </Line>
                 </LineChart>
@@ -687,6 +719,164 @@ function DependenciasSemanais({ setSnack }) {
             </Box>
           </Paper>
         </Box>
+      )}
+    </Paper>
+  );
+}
+
+// ===== Acompanhamento Diário =====
+function AcompanhamentoDiario({ setSnack }) {
+  const [editMode, setEditMode] = useState(false);
+  const [dateStart, setDateStart] = useState(() => {
+    const t = new Date(); t.setMonth(8); t.setDate(12); // 12/set (ajuste livre)
+    return iso(t);
+  });
+  const [dateEnd, setDateEnd] = useState(() => {
+    const t = new Date(); t.setMonth(11); t.setDate(31);
+    return iso(t);
+  });
+
+  const [diarioLoading, setDiarioLoading] = useState(false);
+  const [rows, setRows] = useState([]); // [{data, uf, valor}]
+  const [weekly, setWeekly] = useState([]); // [{week,total}]
+
+  const colDates = useMemo(()=>{
+    const a = new Date(dateStart), b = new Date(dateEnd);
+    const out = [];
+    for(let d=new Date(a); d<=b; d=addDays(d,1)) out.push(iso(d));
+    return out;
+  }, [dateStart, dateEnd]);
+
+  const pivot = useMemo(()=>{
+    const map = {};
+    for(const uf of UFS) map[uf] = {};
+    for(const r of (rows||[])){
+      const uf = (r.uf||"").toUpperCase();
+      if(!map[uf]) map[uf] = {};
+      map[uf][r.data] = (r.valor===""||r.valor==null)? null : Number(r.valor);
+    }
+    return map;
+  }, [rows]);
+
+  const load = async ()=>{
+    if(!dateStart || !dateEnd) return;
+    setDiarioLoading(true);
+    try {
+      const r = await axios.get("/cassi/diario", { params: { start: dateStart, end: dateEnd }});
+      setRows(r.data || []);
+    } catch {
+      setRows([]);
+    } finally { setDiarioLoading(false); }
+  };
+  const loadWeekly = async ()=>{
+    if(!dateStart || !dateEnd) return;
+    try {
+      const r = await axios.get("/cassi/diario/weekly", { params: { start: dateStart, end: dateEnd }});
+      setWeekly(r.data || []);
+    } catch { setWeekly([]); }
+  };
+
+  useEffect(()=>{ load(); loadWeekly(); /* eslint-disable-next-line */ }, [dateStart, dateEnd]);
+
+  const saveCell = async (uf, dataISO, value) => {
+    try {
+      await axios.post("/cassi/diario/upsert", {
+        data: dataISO, uf, valor: (value===""? null : Number(value))
+      });
+      setRows(prev=>{
+        const idx = prev.findIndex(x=>x.uf===uf && x.data===dataISO);
+        const v = (value===""? null : Number(value));
+        if (idx>=0){
+          const n=[...prev]; n[idx]={...n[idx], valor:v}; return n;
+        }
+        return [...prev, { data:dataISO, uf, valor:v }];
+      });
+    } catch {
+      setSnack({ open:true, type:"error", text:"Falha ao salvar célula." });
+    }
+  };
+
+  return (
+    <Paper sx={{ p:2, display:"grid", gap:2 }}>
+      <Stack direction="row" spacing={2} sx={{ flexWrap:"wrap", alignItems:"center" }}>
+        <TextField
+          label="Início" type="date" value={dateStart}
+          onChange={(e)=>setDateStart(e.target.value)}
+          InputLabelProps={{ shrink:true }} size="small"
+        />
+        <TextField
+          label="Fim" type="date" value={dateEnd}
+          onChange={(e)=>setDateEnd(e.target.value)}
+          InputLabelProps={{ shrink:true }} size="small"
+        />
+        <Button startIcon={<RefreshIcon />} onClick={()=>{ load(); loadWeekly(); }} disabled={diarioLoading}>
+          {diarioLoading ? "Carregando..." : "Atualizar"}
+        </Button>
+        <Box sx={{ flex:1 }} />
+        <Stack direction="row" alignItems="center" spacing={1}>
+          <EditIcon fontSize="small" />
+          <Switch checked={editMode} onChange={(e)=>setEditMode(e.target.checked)} />
+          <Typography variant="body2">{editMode ? "Modo edição" : "Somente leitura"}</Typography>
+        </Stack>
+      </Stack>
+
+      {diarioLoading ? <LinearProgress /> : (
+        <>
+          <Box sx={{ overflowX:"auto" }}>
+            <Table size="small" sx={{ minWidth: Math.max(1000, colDates.length*110) }}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>UF</TableCell>
+                  {colDates.map(d=>(
+                    <TableCell key={d} align="right">
+                      {new Date(d).toLocaleDateString("pt-BR",{day:"2-digit",month:"2-digit"})}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {UFS.map((uf)=>(
+                  <TableRow key={uf} hover>
+                    <TableCell sx={{ fontWeight: uf==="DELTA" ? 700 : 400 }}>{uf}</TableCell>
+                    {colDates.map((d)=>{
+                      const v = pivot?.[uf]?.[d] ?? null;
+                      return (
+                        <TableCell key={`${uf}-${d}`} align="right">
+                          {editMode ? (
+                            <TextField
+                              type="number"
+                              value={v ?? ""}
+                              onChange={(e)=>saveCell(uf, d, e.target.value)}
+                              size="small"
+                              inputProps={{ step:"any", style:{ textAlign:"right" }}}
+                              sx={{ minWidth: 100 }}
+                            />
+                          ) : (
+                            v==null ? "-" : v
+                          )}
+                        </TableCell>
+                      );
+                    })}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Box>
+
+          <Typography variant="subtitle1" sx={{ mt:2 }}>Evolução Semanal (DELTA)</Typography>
+          <Box sx={{ height: 340 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={weekly} margin={{top:10,right:20,left:0,bottom:0}}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="week" />
+                <YAxis />
+                <RTooltip />
+                <Legend />
+                <Line type="monotone" dataKey="total" stroke={COLORS[0]} strokeWidth={2} dot />
+              </LineChart>
+            </ResponsiveContainer>
+          </Box>
+        </>
       )}
     </Paper>
   );

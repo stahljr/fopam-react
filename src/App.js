@@ -32,6 +32,9 @@ function App() {
   const [displayName, setDisplayName] = useState('');
   const [currentPage, setCurrentPage] = useState('dashboard');
 
+  // Drawer retrátil: controle global aqui
+  const [navOpen, setNavOpen] = useState(false);
+
   // Dialog de importação
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState(null);
@@ -84,6 +87,7 @@ function App() {
     setEmail('');
     setPassword('');
     setError('');
+    setNavOpen(false);
   };
 
   const handleSolicitarAcesso = async () => {
@@ -242,8 +246,15 @@ function App() {
         sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'background.paper' }}
       >
         <Toolbar sx={{ px: 2 }}>
-          <Box sx={{ flex: 1 }}>
-            <img src="/serges_icon.png" alt="Serges" style={{ height: 28 }} />
+          <Box sx={{ flex: 1, display: 'flex', alignItems: 'center' }}>
+            {/* Logo abre/fecha o Drawer */}
+            <img
+              src="/serges_icon.png"
+              alt="Serges"
+              style={{ height: 28, cursor: 'pointer' }}
+              onClick={() => setNavOpen((o) => !o)}
+              title="Abrir menu"
+            />
           </Box>
           <Typography variant="h6" fontWeight="bold" sx={{ flex: 1, textAlign: 'center' }}>
             {currentPage === 'relatorios' ? 'Relatórios Personalizados' : 'Relatório Analítico FOPAM'}
@@ -316,7 +327,13 @@ function App() {
         {showAdmin && userRole === 'admin' ? (
           <AdminPanel />
         ) : currentPage === 'dashboard' ? (
-          <Dashboard userEmail={session.user.email} userName={displayName} />
+          <Dashboard
+            userEmail={session.user.email}
+            userName={displayName}
+            navOpen={navOpen}
+            setNavOpen={setNavOpen}
+            onNavigate={() => setNavOpen(false)} // fecha ao navegar
+          />
         ) : (
           <Relatorios />
         )}
