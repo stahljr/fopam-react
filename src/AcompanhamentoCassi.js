@@ -136,12 +136,14 @@ function ResumoCaptador({ setSnack }) {
   const totals = useMemo(()=>{
     const acc = {aberto:0, agendado:0, realizado:0, atendido:0, no_show:0, andamento:0, total:0};
     for (const r of rows) {
+      const ag = (+r.agendado || 0);
+      const re = (+r.realizado || 0);
       acc.aberto    += +r.aberto    || 0;
-      acc.agendado  += +r.agendado  || 0;
-      acc.realizado += +r.realizado || 0;
+      acc.agendado  += ag;
+      acc.realizado += re;
       acc.atendido  += +r.atendido  || 0;
       acc.no_show   += +r.no_show   || 0;
-      acc.andamento += +r.andamento || 0;
+      acc.andamento += +r.andamento || (ag + re);
       acc.total     += +r.total     || 0;
     }
     return acc;
@@ -171,7 +173,12 @@ function ResumoCaptador({ setSnack }) {
 
   const save = async () => {
     try {
-      await axios.post("/cassi/resumo/upsert", { mes: periodoStr, rows });
+      // garante andamento = agendado + realizado
+      const rowsToSend = (rows || []).map(r => ({
+        ...r,
+        andamento: (+r.agendado || 0) + (+r.realizado || 0)
+      }));
+      await axios.post("/cassi/resumo/upsert", { mes: periodoStr, rows: rowsToSend });
       setSnack({ open:true, type:"success", text:"Resumo salvo!" });
       await load();
       setEditMode(false);
@@ -228,56 +235,81 @@ function ResumoCaptador({ setSnack }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((r, idx) => (
-              <TableRow key={idx} hover>
-                <TableCell>
-                  {editMode ? (
-                    <TextField
-                      value={r.captador ?? ""}
-                      onChange={(e)=>setRows(prev=>{
-                        const n=[...prev]; n[idx]={...n[idx],captador:e.target.value}; return n;
-                      })}
-                      size="small"
-                      placeholder="Nome"
-                      fullWidth
-                    />
-                  ) : (r.captador || "-")}
-                </TableCell>
+            {rows.map((r, idx) => {
+              const andamentoVal = (+r.agendado || 0) + (+r.realizado || 0);
+              return (
+                <TableRow key={idx} hover>
+                  <TableCell>
+                    {editMode ? (
+                      <TextField
+                        value={r.captador ?? ""}
+                        onChange={(e)=>setRows(prev=>{
+                          const n=[...prev]; n[idx]={...n[idx],captador:e.target.value}; return n;
+                        })}
+                        size="small"
+                        placeholder="Nome"
+                        fullWidth
+                      />
+                    ) : (r.captador || "-")}
+                  </TableCell>
 
-                {["aberto","agendado","realizado","atendido","no_show","andamento","total"].map((k)=>(
-                  <TableCell key={k} align="right" sx={{ whiteSpace:"nowrap" }}>
+                  {["aberto","agendado","realizado","atendido","no_show"].map((k)=>(
+                    <TableCell key={k} align="right" sx={{ whiteSpace:"nowrap" }}>
+                      <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                        {editMode ? (
+                          <TextField
+                            value={r[k] ?? ""}
+                            onChange={(e)=>setRows(prev=>{
+                              const val = e.target.value === "" ? "" : Number(e.target.value);
+                              const n=[...prev]; n[idx] = { ...n[idx], [k]: val }; return n;
+                            })}
+                            type="number"
+                            size="small"
+                            sx={{ width: 110 }}
+                            inputProps={{ step:"any" }}
+                          />
+                        ) : <Typography>{valueOrDash(r[k])}</Typography>}
+                        <Typography variant="caption" color="text.secondary">
+                          {k==="no_show" ? "-" : pct(r[k], r.total)}
+                        </Typography>
+                      </Stack>
+                    </TableCell>
+                  ))}
+
+                  {/* ANDAMENTO (somente leitura: agendado + realizado) */}
+                  <TableCell align="right">
                     <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
-                      {editMode ? (
-                        <TextField
-                          value={r[k] ?? ""}
-                          onChange={(e)=>setRows(prev=>{
-                            const val = e.target.value === "" ? "" : Number(e.target.value);
-                            const n=[...prev]; n[idx] = { ...n[idx], [k]: val }; return n;
-                          })}
-                          type="number"
-                          size="small"
-                          sx={{ width: 110 }}
-                          inputProps={{ step:"any" }}
-                        />
-                      ) : <Typography>{valueOrDash(r[k])}</Typography>}
+                      <Typography>{valueOrDash(andamentoVal)}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {k==="total" ? "-" : pct(r[k], r.total)}
+                        {pct(andamentoVal, r.total)}
                       </Typography>
                     </Stack>
                   </TableCell>
-                ))}
 
-                {editMode && (
-                  <TableCell align="center">
-                    <Tooltip title="Excluir">
-                      <IconButton size="small" onClick={()=>delRow(idx)}>
-                        <DeleteIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
+                  <TableCell align="right">
+                    {editMode ? (
+                      <TextField
+                        type="number" size="small" sx={{ width: 110 }}
+                        value={r.total ?? ""} onChange={(e)=>setRows(prev=>{
+                          const n=[...prev]; n[idx]={...n[idx], total: (e.target.value===""? "": Number(e.target.value))}; return n;
+                        })}
+                        inputProps={{ step:"any" }}
+                      />
+                    ) : (valueOrDash(r.total))}
                   </TableCell>
-                )}
-              </TableRow>
-            ))}
+
+                  {editMode && (
+                    <TableCell align="center">
+                      <Tooltip title="Excluir">
+                        <IconButton size="small" onClick={()=>delRow(idx)}>
+                          <DeleteIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    </TableCell>
+                  )}
+                </TableRow>
+              );
+            })}
 
             <TableRow>
               <TableCell sx={{ fontWeight: "bold" }}>Total</TableCell>
@@ -286,7 +318,14 @@ function ResumoCaptador({ setSnack }) {
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.realizado)}</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.atendido)}</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.no_show)}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.andamento)}</TableCell>
+              <TableCell align="right" sx={{ fontWeight: "bold" }}>
+                <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                  <Typography>{valueOrDash(totals.andamento)}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {pct(totals.andamento, totals.total)}
+                  </Typography>
+                </Stack>
+              </TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.total)}</TableCell>
               {editMode && <TableCell />}
             </TableRow>
@@ -313,14 +352,17 @@ function ResumoPorEPS({ setSnack }) {
   ];
 
   const totals = useMemo(()=>{
-    const acc = {aberto:0, agendado:0, realizado:0, atendido:0, no_show:0, total:0};
+    const acc = {aberto:0, agendado:0, realizado:0, atendido:0, no_show:0, andamento:0, total:0};
     for (const r of rows) {
-      acc.aberto   += +r.aberto   || 0;
-      acc.agendado += +r.agendado || 0;
-      acc.realizado+= +r.realizado|| 0;
-      acc.atendido += +r.atendido || 0;
-      acc.no_show  += +r.no_show  || 0;
-      acc.total    += +r.total    || 0;
+      const ag = (+r.agendado || 0);
+      const re = (+r.realizado || 0);
+      acc.aberto    += +r.aberto    || 0;
+      acc.agendado  += ag;
+      acc.realizado += re;
+      acc.atendido  += +r.atendido  || 0;
+      acc.no_show   += +r.no_show   || 0;
+      acc.total     += +r.total     || 0;
+      acc.andamento += ag + re;
     }
     return acc;
   }, [rows]);
@@ -351,7 +393,12 @@ function ResumoPorEPS({ setSnack }) {
 
   const save = async () => {
     try {
-      await axios.post("/cassi/resumo-eps/upsert", { mes: periodoStr, rows });
+      // envia 'andamento' = agendado + realizado
+      const rowsToSend = (rows || []).map(r => ({
+        ...r,
+        andamento: (+r.agendado || 0) + (+r.realizado || 0)
+      }));
+      await axios.post("/cassi/resumo-eps/upsert", { mes: periodoStr, rows: rowsToSend });
       setSnack({ open:true, type:"success", text:"Resumo por EPS salvo!" });
       await load();
       setEditMode(false);
@@ -402,40 +449,51 @@ function ResumoPorEPS({ setSnack }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((r, idx)=>(
-              <TableRow key={r.uf} hover>
-                <TableCell sx={{ fontWeight: 600 }}>{r.uf}</TableCell>
+            {rows.map((r, idx)=>{
+              const andamentoVal = (+r.agendado || 0) + (+r.realizado || 0);
+              return (
+                <TableRow key={r.uf} hover>
+                  <TableCell sx={{ fontWeight: 600 }}>{r.uf}</TableCell>
 
-                {["aberto","agendado","realizado","atendido","no_show"].map(k=>(
-                  <TableCell key={k} align="right">
+                  {["aberto","agendado","realizado","atendido","no_show"].map(k=>(
+                    <TableCell key={k} align="right">
+                      <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                        {editMode ? (
+                          <TextField
+                            type="number" size="small" sx={{ width: 110 }}
+                            value={r[k] ?? ""} onChange={(e)=>setVal(idx, k, e.target.value)}
+                            inputProps={{ step:"any" }}
+                          />
+                        ) : <Typography>{valueOrDash(r[k])}</Typography>}
+                        <Typography variant="caption" color="text.secondary">
+                          {k==="no_show" ? "-" : pctOrDash(r[k], r.total)}
+                        </Typography>
+                      </Stack>
+                    </TableCell>
+                  ))}
+
+                  {/* ANDAMENTO (computado = agendado + realizado) */}
+                  <TableCell align="right">
                     <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
-                      {editMode ? (
-                        <TextField
-                          type="number" size="small" sx={{ width: 110 }}
-                          value={r[k] ?? ""} onChange={(e)=>setVal(idx, k, e.target.value)}
-                          inputProps={{ step:"any" }}
-                        />
-                      ) : <Typography>{valueOrDash(r[k])}</Typography>}
+                      <Typography>{valueOrDash(andamentoVal)}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {k==="no_show" ? "-" : pctOrDash(r[k], r.total)}
+                        {pctOrDash(andamentoVal, r.total)}
                       </Typography>
                     </Stack>
                   </TableCell>
-                ))}
 
-                <TableCell align="right">{pctOrDash(r.realizado, r.total)}</TableCell>
-
-                <TableCell align="right">
-                  {editMode ? (
-                    <TextField
-                      type="number" size="small" sx={{ width: 110 }}
-                      value={r.total ?? ""} onChange={(e)=>setVal(idx, "total", e.target.value)}
-                      inputProps={{ step:"any" }}
-                    />
-                  ) : (valueOrDash(r.total))}
-                </TableCell>
-              </TableRow>
-            ))}
+                  <TableCell align="right">
+                    {editMode ? (
+                      <TextField
+                        type="number" size="small" sx={{ width: 110 }}
+                        value={r.total ?? ""} onChange={(e)=>setVal(idx, "total", e.target.value)}
+                        inputProps={{ step:"any" }}
+                      />
+                    ) : (valueOrDash(r.total))}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
 
             <TableRow>
               <TableCell sx={{ fontWeight: "bold" }}>Total</TableCell>
@@ -444,7 +502,14 @@ function ResumoPorEPS({ setSnack }) {
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.realizado)}</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.atendido)}</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.no_show)}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: "bold" }}>{pctOrDash(totals.realizado, totals.total)}</TableCell>
+              <TableCell align="right" sx={{ fontWeight: "bold" }}>
+                <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                  <Typography>{valueOrDash(totals.andamento)}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {pctOrDash(totals.andamento, totals.total)}
+                  </Typography>
+                </Stack>
+              </TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.total)}</TableCell>
             </TableRow>
           </TableBody>
@@ -470,12 +535,15 @@ function ResumoDependencia({ setSnack }) {
   ];
 
   const totals = useMemo(()=>{
-    const acc = {aberto:0, agendado:0, realizado:0, total:0};
+    const acc = {aberto:0, agendado:0, realizado:0, andamento:0, total:0};
     for (const r of rows) {
-      acc.aberto   += +r.aberto   || 0;
-      acc.agendado += +r.agendado || 0;
-      acc.realizado+= +r.realizado|| 0;
-      acc.total    += +r.total    || 0;
+      const ag = (+r.agendado || 0);
+      const re = (+r.realizado || 0);
+      acc.aberto    += +r.aberto    || 0;
+      acc.agendado  += ag;
+      acc.realizado += re;
+      acc.total     += +r.total     || 0;
+      acc.andamento += ag + re;
     }
     return acc;
   }, [rows]);
@@ -506,7 +574,12 @@ function ResumoDependencia({ setSnack }) {
 
   const save = async () => {
     try {
-      await axios.post("/cassi/resumo-dependencia/upsert", { mes: periodoStr, rows });
+      // envia 'andamento' = agendado + realizado
+      const rowsToSend = (rows || []).map(r => ({
+        ...r,
+        andamento: (+r.agendado || 0) + (+r.realizado || 0)
+      }));
+      await axios.post("/cassi/resumo-dependencia/upsert", { mes: periodoStr, rows: rowsToSend });
       setSnack({ open:true, type:"success", text:"Resumo por Dependência salvo!" });
       await load();
       setEditMode(false);
@@ -555,47 +628,65 @@ function ResumoDependencia({ setSnack }) {
             </TableRow>
           </TableHead>
           <TableBody>
-            {rows.map((r, idx)=>(
-              <TableRow key={r.uf} hover>
-                <TableCell sx={{ fontWeight: 600 }}>{r.uf}</TableCell>
+            {rows.map((r, idx)=>{
+              const andamentoVal = (+r.agendado || 0) + (+r.realizado || 0);
+              return (
+                <TableRow key={r.uf} hover>
+                  <TableCell sx={{ fontWeight: 600 }}>{r.uf}</TableCell>
 
-                {["aberto","agendado","realizado"].map(k=>(
-                  <TableCell key={k} align="right">
+                  {["aberto","agendado","realizado"].map(k=>(
+                    <TableCell key={k} align="right">
+                      <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                        {editMode ? (
+                          <TextField
+                            type="number" size="small" sx={{ width: 110 }}
+                            value={r[k] ?? ""} onChange={(e)=>setVal(idx, k, e.target.value)}
+                            inputProps={{ step:"any" }}
+                          />
+                        ) : <Typography>{valueOrDash(r[k])}</Typography>}
+                        <Typography variant="caption" color="text.secondary">
+                          {pctOrDash(r[k], r.total)}
+                        </Typography>
+                      </Stack>
+                    </TableCell>
+                  ))}
+
+                  {/* ANDAMENTO (computado = agendado + realizado) */}
+                  <TableCell align="right">
                     <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
-                      {editMode ? (
-                        <TextField
-                          type="number" size="small" sx={{ width: 110 }}
-                          value={r[k] ?? ""} onChange={(e)=>setVal(idx, k, e.target.value)}
-                          inputProps={{ step:"any" }}
-                        />
-                      ) : <Typography>{valueOrDash(r[k])}</Typography>}
+                      <Typography>{valueOrDash(andamentoVal)}</Typography>
                       <Typography variant="caption" color="text.secondary">
-                        {pctOrDash(r[k], r.total)}
+                        {pctOrDash(andamentoVal, r.total)}
                       </Typography>
                     </Stack>
                   </TableCell>
-                ))}
 
-                <TableCell align="right">{pctOrDash(r.realizado, r.total)}</TableCell>
-
-                <TableCell align="right">
-                  {editMode ? (
-                    <TextField
-                      type="number" size="small" sx={{ width: 110 }}
-                      value={r.total ?? ""} onChange={(e)=>setVal(idx, "total", e.target.value)}
-                      inputProps={{ step:"any" }}
-                    />
-                  ) : (valueOrDash(r.total))}
-                </TableCell>
-              </TableRow>
-            ))}
+                  <TableCell align="right">
+                    {editMode ? (
+                      <TextField
+                        type="number" size="small" sx={{ width: 110 }}
+                        value={r.total ?? ""} onChange={(e)=>setVal(idx, "total", e.target.value)}
+                        inputProps={{ step:"any" }}
+                      />
+                    ) : (valueOrDash(r.total))}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
 
             <TableRow>
               <TableCell sx={{ fontWeight: "bold" }}>Total</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.aberto)}</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.agendado)}</TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.realizado)}</TableCell>
-              <TableCell align="right" sx={{ fontWeight: "bold" }}>{pctOrDash(totals.realizado, totals.total)}</TableCell>
+              <TableCell align="right" sx={{ fontWeight: "bold" }}>
+                <Stack direction="row" spacing={1} justifyContent="flex-end" alignItems="center">
+                  <Typography>{valueOrDash(totals.andamento)}</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    {pctOrDash(totals.andamento, totals.total)}
+                  </Typography>
+                </Stack>
+              </TableCell>
               <TableCell align="right" sx={{ fontWeight: "bold" }}>{valueOrDash(totals.total)}</TableCell>
             </TableRow>
           </TableBody>
@@ -896,7 +987,7 @@ function DependenciasSemanais({ setSnack }) {
             <Typography variant="subtitle1" sx={{ mb: 1 }}>Linha do tempo (Semanas)</Typography>
             <Box sx={{ height: { xs: 280, md: 340 } }}>
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <LineChart data={chartData} margin={{top:10,right:20,left:0,bottom:0}}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="periodo" />
                   <YAxis />

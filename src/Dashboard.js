@@ -31,6 +31,7 @@ import {
   LinearProgress,
   Snackbar,
   Alert,
+  MenuItem,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import EditIcon from '@mui/icons-material/Edit';
@@ -40,7 +41,7 @@ import ExpandMoreIcon from '@mui/icons-material/KeyboardArrowRight';
 import ExpandLessIcon from '@mui/icons-material/KeyboardArrowDown';
 import PhotoCameraIcon from '@mui/icons-material/PhotoCamera';
 import ClearIcon from '@mui/icons-material/Clear';
-import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import axios from 'axios';
 import AcompanhamentoCassi from './AcompanhamentoCassi';
 
@@ -82,6 +83,10 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   const [dialogRateBill, setDialogRateBill] = useState(0);
   const [savingDialog, setSavingDialog] = useState(false);
 
+  // NOVOS: exclusões no modal + confirmação
+  const [deletedIds, setDeletedIds] = useState([]);            // IDs a excluir (somente já existentes no banco)
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false); // confirmação antes de salvar se houver exclusões
+
   // autocálculo DESLIGADO por padrão
   const [autoCalcPay, setAutoCalcPay] = useState(false);
   const [autoCalcBill, setAutoCalcBill] = useState(false);
@@ -99,10 +104,15 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   const [savingProfile, setSavingProfile] = useState(false);
   const fileInputRef = useRef(null);
 
-  // --- NF (novo diálogo) ---
-  const [nfDialogOpen, setNfDialogOpen] = useState(false);
-  const [nfRows, setNfRows] = useState([]); // {id, data_servico, nf_servico, nf_faturamento}
-  const [savingNf, setSavingNf] = useState(false);
+  // --- WhatsApp (enviar confirmação de produção) ---
+  const [waDialogOpen, setWaDialogOpen] = useState(false);
+  const [waDialogRow, setWaDialogRow] = useState(null);
+  const [waSending, setWaSending] = useState(false);
+  // NOVOS CAMPOS: datas, tipo de data e telefone opcional
+  const [waStart, setWaStart] = useState('');
+  const [waEnd, setWaEnd] = useState('');
+  const [waTipoData, setWaTipoData] = useState('servico'); // 'servico' (default) | 'pagamento'
+  const [waPhone, setWaPhone] = useState(''); // opcional: sobrescreve telefone do contato, se informado
 
   // feedback global
   const [snackbar, setSnackbar] = useState({ open: false, severity: 'success', message: '' });
@@ -281,6 +291,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   const handleOpenNew = () => {
     if (!selectedMonth) return;
     setDialogMode('new');
+    setDeletedIds([]); // zera exclusões
     setDialogGlobal({
       projeto: '',
       profissional: '',
@@ -302,6 +313,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   // abrir diálogo editar
   const handleOpenEdit = (row) => {
     setDialogMode('edit');
+    setDeletedIds([]); // zera exclusões no início da edição
     const first = row.rows?.[0] || row;
     // Ordena as linhas por data (mais antiga -> mais nova)
     const rowsOrdered = (row.rows || [row]).slice().sort((a, b) => new Date(a.data_servico) - new Date(b.data_servico));
@@ -335,23 +347,42 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     setDialogOpen(true);
   };
 
-  // abrir diálogo NF para grupo (profissional) ou linha única
-  const handleOpenNfDialog = (row) => {
-    const rowsArr = (row.rows || [row]).map((r) => ({
-      id: r.id,
-      data_servico: r.data_servico,
-      nf_servico: r.nf_servico || '',
-      nf_faturamento: r.nf_faturamento || '',
-    }));
-    setNfRows(rowsArr);
-    setNfDialogOpen(true);
+  // ======== SALVAR COM CONFIRMAÇÃO DE EXCLUSÕES ========
+
+  // 1) Ação do botão "Salvar" do modal
+  const handleRequestSaveDialog = () => {
+    if (dialogMode === 'edit' && deletedIds.length > 0) {
+      setConfirmDeleteOpen(true); // pergunta antes
+      return;
+    }
+    handleSaveDialogInternal();
   };
 
-  // salvar (new/edit)
-  const handleSaveDialog = async () => {
+  // 2) Confirmação: "Excluir e salvar"
+  const handleConfirmDeleteAndSave = async () => {
+    setConfirmDeleteOpen(false);
+    await handleSaveDialogInternal(true);
+  };
+
+  // 3) Implementação do save (new/edit)
+  const handleSaveDialogInternal = async (confirmed = false) => {
     try {
       setSavingDialog(true);
+
+      // Se estiver no modo editar e houver linhas excluídas, garanta que foram confirmadas
+      if (dialogMode === 'edit' && deletedIds.length > 0 && !confirmed) {
+        setConfirmDeleteOpen(true);
+        setSavingDialog(false);
+        return;
+      }
+
+      // EXCLUI PRIMEIRO (apenas no modo editar)
+      if (dialogMode === 'edit' && deletedIds.length > 0) {
+        await axios.post('/delete_many', { ids: deletedIds });
+      }
+
       if (dialogMode === 'new') {
+        // inserts
         for (const r of dialogRows) {
           const payload = {
             projeto: dialogGlobal.projeto,
@@ -372,7 +403,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
           await axios.post('/add', payload);
         }
       } else {
-        // atualiza os campos "globais" em todas as linhas visíveis
+        // MODO EDITAR: atualiza os campos "globais" em todas as linhas REMANESCENTES
         const ids = dialogRows.map((r) => r.id).filter(Boolean);
         if (ids.length) {
           await axios.post('/update_many', {
@@ -391,7 +422,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
             },
           });
         }
-        // atualiza horas/pag/fat linha a linha (pois variam)
+        // atualiza/insere linha a linha
         for (const r of dialogRows) {
           if (r.id) {
             await axios.post('/update', { id: r.id, field: 'data_servico', value: r.data_servico });
@@ -420,6 +451,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
       }
 
       setDialogOpen(false);
+      setDeletedIds([]); // limpa exclusões
       setSnackbar({ open: true, severity: 'success', message: 'Dados salvos com sucesso.' });
       await fetchData(selectedMonth, true); // preserva expansões
     } catch (err) {
@@ -427,25 +459,6 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
       setSnackbar({ open: true, severity: 'error', message: 'Falha ao salvar. Tente novamente.' });
     } finally {
       setSavingDialog(false);
-    }
-  };
-
-  // salvar NF
-  const handleSaveNf = async () => {
-    try {
-      setSavingNf(true);
-      for (const r of nfRows) {
-        await axios.post('/update', { id: r.id, field: 'nf_servico', value: r.nf_servico || null });
-        await axios.post('/update', { id: r.id, field: 'nf_faturamento', value: r.nf_faturamento || null });
-      }
-      setNfDialogOpen(false);
-      setSnackbar({ open: true, severity: 'success', message: 'Dados incluídos com sucesso.' });
-      await fetchData(selectedMonth, true);
-    } catch (err) {
-      console.error('Erro ao incluir NFs:', err);
-      setSnackbar({ open: true, severity: 'error', message: 'Falha ao incluir NFs. Tente novamente.' });
-    } finally {
-      setSavingNf(false);
     }
   };
 
@@ -468,7 +481,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
-  // excluir (com confirmação)
+  // excluir (com confirmação) — fora do modal de edição (ação do ícone da lista)
   const handleDeleteRow = async (row) => {
     const many = row.ids && Array.isArray(row.ids);
     const msg = many
@@ -559,6 +572,40 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
       console.error('Erro ao salvar perfil:', err);
       setSavingProfile(false);
       setSnackbar({ open: true, severity: 'error', message: 'Falha ao atualizar perfil.' });
+    }
+  };
+
+  // --- WhatsApp handlers ---
+  const handleOpenWaDialog = (row) => {
+    setWaDialogRow(row);
+    // limpa campos ao abrir
+    setWaStart('');
+    setWaEnd('');
+    setWaTipoData('servico');
+    setWaPhone('');
+    setWaDialogOpen(true);
+  };
+
+  const handleSendWhatsApp = async () => {
+    if (!waDialogRow) return;
+    setWaSending(true);
+    try {
+      const payload = {
+        profissional: waDialogRow.profissional,
+        // só envia se o usuário preencheu
+        ...(waPhone ? { phone: waPhone.replace(/\D/g, '') } : {}),
+        ...(waStart ? { start: waStart } : {}),
+        ...(waEnd ? { end: waEnd } : {}),
+        ...(waTipoData ? { tipo_data: waTipoData } : {}),
+      };
+      const r = await axios.post('/whatsapp/send-confirmation', payload);
+      setSnackbar({ open: true, severity: 'success', message: r?.data?.message || 'Mensagem enviada no WhatsApp!' });
+      setWaDialogOpen(false);
+    } catch (err) {
+      const msg = err?.response?.data?.error || 'Falha ao enviar WhatsApp.';
+      setSnackbar({ open: true, severity: 'error', message: msg });
+    } finally {
+      setWaSending(false);
     }
   };
 
@@ -742,8 +789,8 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                                     {dateOpen ? <ExpandLessIcon /> : <ExpandMoreIcon />}
                                   </IconButton>
                                   <Typography variant="subtitle2" fontWeight="bold" sx={{ display: 'flex', alignItems: 'center' }}>
-                                    Dia {dia} — ({projCount} projetos) — Horas: {totHoras.toLocaleString('pt-BR')} — Pag:{' '}
-                                    {totPag.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} — Fat:{' '}
+                                    Dia {dia} — ({projCount} projetos) — Horas: {totHoras.toLocaleString('pt-BR')} — Pag{' '}
+                                    {totPag.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} — Fat{' '}
                                     {totFat.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                     {allValidatedDate && <CheckCircleIcon sx={{ color: 'success.main', ml: 1 }} />}
                                   </Typography>
@@ -840,8 +887,8 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                                               <IconButton size="small" onClick={() => handleOpenEdit(prof)} title="Editar">
                                                 <EditIcon fontSize="small" />
                                               </IconButton>
-                                              <IconButton size="small" onClick={() => handleOpenNfDialog(prof)} title="Incluir NF">
-                                                <ReceiptLongIcon fontSize="small" />
+                                              <IconButton size="small" onClick={() => handleOpenWaDialog(prof)} title="Enviar WhatsApp">
+                                                <WhatsAppIcon fontSize="small" />
                                               </IconButton>
                                               <IconButton size="small" onClick={() => handleDeleteRow(prof)} title="Excluir">
                                                 <DeleteIcon fontSize="small" />
@@ -1002,8 +1049,17 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                             <IconButton
                               disabled={savingDialog}
                               onClick={() =>
-                                setDialogRows((rows) => rows.filter((_, i) => i !== idx))
+                                setDialogRows((rows) => {
+                                  const target = rows[idx];
+                                  // se a linha existe no banco, marca para exclusão
+                                  if (target?.id) {
+                                    setDeletedIds((prev) => Array.from(new Set([...prev, target.id])));
+                                  }
+                                  // remove visualmente do modal
+                                  return rows.filter((_, i) => i !== idx);
+                                })
                               }
+                              title="Remover linha"
                             >
                               <DeleteIcon />
                             </IconButton>
@@ -1120,77 +1176,97 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
               </DialogContent>
               <DialogActions>
                 <Button onClick={() => setDialogOpen(false)} disabled={savingDialog}>Cancelar</Button>
-                <Button onClick={handleSaveDialog} variant="contained" disabled={savingDialog}>
+                <Button onClick={handleRequestSaveDialog} variant="contained" disabled={savingDialog}>
                   {savingDialog ? 'Salvando...' : 'Salvar'}
                 </Button>
               </DialogActions>
             </Dialog>
 
-            {/* Dialog de NF */}
-            <Dialog open={nfDialogOpen} onClose={() => (savingNf ? null : setNfDialogOpen(false))} maxWidth="sm" fullWidth>
-              <DialogTitle>Incluir NF de Serviço / Faturamento</DialogTitle>
-              <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
-                {savingNf && (
-                  <Box sx={{ mb: 2 }}>
-                    <LinearProgress />
-                    <Typography variant="body2" sx={{ mt: 1 }}>Carregando dados...</Typography>
-                  </Box>
-                )}
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Data do Serviço</TableCell>
-                      <TableCell>NF Serviço</TableCell>
-                      <TableCell>NF Faturamento</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {nfRows.map((r, idx) => (
-                      <TableRow key={r.id || idx}>
-                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                          <TextField type="date" value={r.data_servico} InputLabelProps={{ shrink: true }} disabled fullWidth />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            value={r.nf_servico}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setNfRows((rows) => {
-                                const nr = [...rows];
-                                nr[idx].nf_servico = v;
-                                return nr;
-                              });
-                            }}
-                            placeholder="Número / link / referência"
-                            disabled={savingNf}
-                            fullWidth
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <TextField
-                            value={r.nf_faturamento}
-                            onChange={(e) => {
-                              const v = e.target.value;
-                              setNfRows((rows) => {
-                                const nr = [...rows];
-                                nr[idx].nf_faturamento = v;
-                                return nr;
-                              });
-                            }}
-                            placeholder="Número / link / referência"
-                            disabled={savingNf}
-                            fullWidth
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+            {/* Diálogo de confirmação de exclusões no modal */}
+            <Dialog open={confirmDeleteOpen} onClose={() => setConfirmDeleteOpen(false)} maxWidth="xs" fullWidth>
+              <DialogTitle>Confirmar exclusões</DialogTitle>
+              <DialogContent dividers>
+                <Typography>
+                  Você removeu <b>{deletedIds.length}</b> {deletedIds.length === 1 ? 'linha' : 'linhas'} desta edição.
+                  Ao salvar, esses registros serão <b>excluídos definitivamente</b> do banco.
+                </Typography>
+                <Typography sx={{ mt: 1 }}>
+                  Deseja prosseguir?
+                </Typography>
               </DialogContent>
               <DialogActions>
-                <Button onClick={() => setNfDialogOpen(false)} disabled={savingNf}>Cancelar</Button>
-                <Button onClick={handleSaveNf} variant="contained" disabled={savingNf}>
-                  {savingNf ? 'Salvando...' : 'Salvar'}
+                <Button onClick={() => setConfirmDeleteOpen(false)}>Voltar</Button>
+                <Button color="error" variant="contained" onClick={handleConfirmDeleteAndSave}>
+                  Excluir e salvar
+                </Button>
+              </DialogActions>
+            </Dialog>
+
+            {/* Dialog de WhatsApp: agora com datas + tipo de data + telefone opcional */}
+            <Dialog open={waDialogOpen} onClose={() => (waSending ? null : setWaDialogOpen(false))} maxWidth="sm" fullWidth>
+              <DialogTitle>Enviar confirmação via WhatsApp</DialogTitle>
+              <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
+                {waSending && (
+                  <Box sx={{ mb: 2 }}>
+                    <LinearProgress />
+                    <Typography variant="body2" sx={{ mt: 1 }}>Enviando…</Typography>
+                  </Box>
+                )}
+                <Typography>
+                  Confirma o envio da mensagem de confirmação de produção para
+                  <b> {waDialogRow?.profissional}</b>?
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                  Se você não informar datas, será usado automaticamente o período da semana passada.
+                  O médico receberá as datas/horas/valores do período e dois botões:
+                  <i> “Sim”</i> e <i>“Solicitar ajustes”</i>.
+                </Typography>
+
+                <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                  <TextField
+                    label="Início (YYYY-MM-DD)"
+                    type="date"
+                    value={waStart}
+                    onChange={(e) => setWaStart(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    disabled={waSending}
+                  />
+                  <TextField
+                    label="Fim (YYYY-MM-DD)"
+                    type="date"
+                    value={waEnd}
+                    onChange={(e) => setWaEnd(e.target.value)}
+                    InputLabelProps={{ shrink: true }}
+                    disabled={waSending}
+                  />
+                </Box>
+
+                <Box sx={{ mt: 2, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                  <TextField
+                    select
+                    label="Tipo de data"
+                    value={waTipoData}
+                    onChange={(e) => setWaTipoData(e.target.value)}
+                    disabled={waSending}
+                  >
+                    <MenuItem value="servico">Data de serviço</MenuItem>
+                    <MenuItem value="pagamento">Data de pagamento</MenuItem>
+                  </TextField>
+
+                  <TextField
+                    label="Telefone (opcional)"
+                    placeholder="Ex.: 11999999999 ou +55 11 99999-9999"
+                    value={waPhone}
+                    onChange={(e) => setWaPhone(e.target.value)}
+                    helperText="Se vazio, usa o telefone do cadastro"
+                    disabled={waSending}
+                  />
+                </Box>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setWaDialogOpen(false)} disabled={waSending}>Cancelar</Button>
+                <Button variant="contained" onClick={handleSendWhatsApp} disabled={waSending}>
+                  {waSending ? 'Enviando…' : 'Enviar'}
                 </Button>
               </DialogActions>
             </Dialog>
