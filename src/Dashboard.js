@@ -14,6 +14,7 @@ import {
   TableRow,
   TableCell,
   TableBody,
+  TablePagination,
   IconButton,
   Dialog,
   DialogTitle,
@@ -32,6 +33,10 @@ import {
   Snackbar,
   Alert,
   MenuItem,
+  Select,
+  Autocomplete,
+  Chip,
+  CircularProgress,
 } from '@mui/material';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import EditIcon from '@mui/icons-material/Edit';
@@ -44,6 +49,10 @@ import ClearIcon from '@mui/icons-material/Clear';
 import WhatsAppIcon from '@mui/icons-material/WhatsApp';
 import axios from 'axios';
 import AcompanhamentoCassi from './AcompanhamentoCassi';
+import CampaignIcon from '@mui/icons-material/Campaign';
+import PeopleIcon from '@mui/icons-material/People';
+import SaveIcon from '@mui/icons-material/Save';
+import RefreshIcon from '@mui/icons-material/Refresh';
 
 // Largura configurada (só influencia o Drawer temporário)
 const drawerWidth = 260;
@@ -84,8 +93,8 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   const [savingDialog, setSavingDialog] = useState(false);
 
   // NOVOS: exclusões no modal + confirmação
-  const [deletedIds, setDeletedIds] = useState([]);            // IDs a excluir (somente já existentes no banco)
-  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false); // confirmação antes de salvar se houver exclusões
+  const [deletedIds, setDeletedIds] = useState([]);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   // autocálculo DESLIGADO por padrão
   const [autoCalcPay, setAutoCalcPay] = useState(false);
@@ -108,11 +117,35 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   const [waDialogOpen, setWaDialogOpen] = useState(false);
   const [waDialogRow, setWaDialogRow] = useState(null);
   const [waSending, setWaSending] = useState(false);
-  // NOVOS CAMPOS: datas, tipo de data e telefone opcional
+
+  // --- Envio em massa (validar produções) ---
+  const [massDialogOpen, setMassDialogOpen] = useState(false);
+  const [massTipoData, setMassTipoData] = useState('pagamento');
+  const [projetosOptions, setProjetosOptions] = useState([]);
+  const [projetosSelecionados, setProjetosSelecionados] = useState([]);
+  const [massSending, setMassSending] = useState(false);
+  const todayIso = new Date().toISOString().slice(0,10);
+  const [massStart, setMassStart] = useState(todayIso);
+  const [massEnd, setMassEnd] = useState(todayIso);
+
+  // --- Médicos (aba de contatos) ---
+  const [medicos, setMedicos] = useState([]);
+  const [medicosLoading, setMedicosLoading] = useState(false);
+  const [medicosPage, setMedicosPage] = useState(0);
+  const [medicosRowsPerPage, setMedicosRowsPerPage] = useState(50);
+  const [medicosTotal, setMedicosTotal] = useState(0);
+  const [medicoQuery, setMedicoQuery] = useState('');
+  const [medicoQueryDebounced, setMedicoQueryDebounced] = useState('');
+
+  // NOVOS CAMPOS WhatsApp dialog
   const [waStart, setWaStart] = useState('');
   const [waEnd, setWaEnd] = useState('');
-  const [waTipoData, setWaTipoData] = useState('servico'); // 'servico' (default) | 'pagamento'
-  const [waPhone, setWaPhone] = useState(''); // opcional: sobrescreve telefone do contato, se informado
+  const [waTipoData, setWaTipoData] = useState('servico');
+  const [waPhone, setWaPhone] = useState('');
+
+  // --- Opções de médicos para Autocomplete (vínculo medico_id) ---
+  const [medicosOptions, setMedicosOptions] = useState([]);
+  const [medicosLoadingList, setMedicosLoadingList] = useState(false);
 
   // feedback global
   const [snackbar, setSnackbar] = useState({ open: false, severity: 'success', message: '' });
@@ -131,7 +164,31 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
       } catch {}
     })();
     return () => { mounted = false; };
-  }, []); // uma vez
+  }, []);
+
+  // Carrega opções de médicos (para o Autocomplete do modal)
+  const loadMedicosOptions = async () => {
+    setMedicosLoadingList(true);
+    try {
+      const r = await axios.get('/medicos/all', { params: { page_size: 1000 } });
+      const arr = Array.isArray(r?.data?.items) ? r.data.items : (Array.isArray(r?.data) ? r.data : []);
+      setMedicosOptions(
+        arr
+          .filter(x => x?.id && x?.profissional)
+          .map(x => ({ id: x.id, label: x.profissional }))
+          .sort((a,b) => a.label.localeCompare(b.label))
+      );
+    } catch (e) {
+      console.error('Erro ao carregar opções de médicos', e);
+      setMedicosOptions([]);
+    } finally {
+      setMedicosLoadingList(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMedicosOptions();
+  }, []);
 
   const displayName = (profileName && profileName.trim()) || userEmail || '';
 
@@ -232,7 +289,6 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     return { datesList, globalTotals };
   };
 
-  // aplica preservação de estado de expansão
   const buildOpenState = (datesList, prevDates, prevProjects, preserve) => {
     const initDates = {};
     const initProjects = {};
@@ -247,7 +303,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     return { initDates, initProjects };
   };
 
-  // busca dados do backend
+  // busca dados do backend (FOPAM)
   const fetchData = async (mes, preserveOpen = false) => {
     const prevDates = preserveOpen ? { ...openDates } : {};
     const prevProjects = preserveOpen ? JSON.parse(JSON.stringify(openProjects || {})) : {};
@@ -274,7 +330,6 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     if (selectedMonth) fetchData(selectedMonth, false);
   }, [selectedMonth]);
 
-  // Helpers de recálculo quando switches forem ligados
   const recalcPagamentos = (rows, rate) =>
     rows.map((r) => {
       const h = parseFloat(r.horas) || 0;
@@ -291,13 +346,14 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   const handleOpenNew = () => {
     if (!selectedMonth) return;
     setDialogMode('new');
-    setDeletedIds([]); // zera exclusões
+    setDeletedIds([]);
     setDialogGlobal({
       projeto: '',
       profissional: '',
       vinculo: '',
       data_pagamento: `${selectedMonth}-01`,
       mes: `${selectedMonth}-01`,
+      medico_id: null,
     });
     setDialogRows([
       { id: null, data_servico: `${selectedMonth}-01`, horas: 0, pagamento: 0, faturamento: 0 },
@@ -313,9 +369,8 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   // abrir diálogo editar
   const handleOpenEdit = (row) => {
     setDialogMode('edit');
-    setDeletedIds([]); // zera exclusões no início da edição
+    setDeletedIds([]);
     const first = row.rows?.[0] || row;
-    // Ordena as linhas por data (mais antiga -> mais nova)
     const rowsOrdered = (row.rows || [row]).slice().sort((a, b) => new Date(a.data_servico) - new Date(b.data_servico));
     setDialogGlobal({
       projeto: first.projeto || '',
@@ -323,6 +378,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
       vinculo: first.vinculo || '',
       data_pagamento: first.data_pagamento || '',
       mes: first.mes || '',
+      medico_id: first.medico_id || null,
     });
     const rowsArr = rowsOrdered.map((r) => ({
       id: r.id,
@@ -348,41 +404,29 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
   };
 
   // ======== SALVAR COM CONFIRMAÇÃO DE EXCLUSÕES ========
-
-  // 1) Ação do botão "Salvar" do modal
   const handleRequestSaveDialog = () => {
     if (dialogMode === 'edit' && deletedIds.length > 0) {
-      setConfirmDeleteOpen(true); // pergunta antes
+      setConfirmDeleteOpen(true);
       return;
     }
     handleSaveDialogInternal();
   };
-
-  // 2) Confirmação: "Excluir e salvar"
   const handleConfirmDeleteAndSave = async () => {
     setConfirmDeleteOpen(false);
     await handleSaveDialogInternal(true);
   };
-
-  // 3) Implementação do save (new/edit)
   const handleSaveDialogInternal = async (confirmed = false) => {
     try {
       setSavingDialog(true);
-
-      // Se estiver no modo editar e houver linhas excluídas, garanta que foram confirmadas
       if (dialogMode === 'edit' && deletedIds.length > 0 && !confirmed) {
         setConfirmDeleteOpen(true);
         setSavingDialog(false);
         return;
       }
-
-      // EXCLUI PRIMEIRO (apenas no modo editar)
       if (dialogMode === 'edit' && deletedIds.length > 0) {
         await axios.post('/delete_many', { ids: deletedIds });
       }
-
       if (dialogMode === 'new') {
-        // inserts
         for (const r of dialogRows) {
           const payload = {
             projeto: dialogGlobal.projeto,
@@ -399,11 +443,11 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
             faturamento_validado: dialogFlags.faturamento_validado,
             valor_hora_pag: dialogRatePay,
             valor_hora_fat: dialogRateBill,
+            medico_id: dialogGlobal.medico_id || null,
           };
           await axios.post('/add', payload);
         }
       } else {
-        // MODO EDITAR: atualiza os campos "globais" em todas as linhas REMANESCENTES
         const ids = dialogRows.map((r) => r.id).filter(Boolean);
         if (ids.length) {
           await axios.post('/update_many', {
@@ -419,10 +463,10 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
               faturamento_validado: dialogFlags.faturamento_validado,
               valor_hora_pag: dialogRatePay,
               valor_hora_fat: dialogRateBill,
+              medico_id: dialogGlobal.medico_id || null,
             },
           });
         }
-        // atualiza/insere linha a linha
         for (const r of dialogRows) {
           if (r.id) {
             await axios.post('/update', { id: r.id, field: 'data_servico', value: r.data_servico });
@@ -445,15 +489,15 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
               faturamento_validado: dialogFlags.faturamento_validado,
               valor_hora_pag: dialogRatePay,
               valor_hora_fat: dialogRateBill,
+              medico_id: dialogGlobal.medico_id || null,
             });
           }
         }
       }
-
       setDialogOpen(false);
-      setDeletedIds([]); // limpa exclusões
+      setDeletedIds([]);
       setSnackbar({ open: true, severity: 'success', message: 'Dados salvos com sucesso.' });
-      await fetchData(selectedMonth, true); // preserva expansões
+      await fetchData(selectedMonth, true);
     } catch (err) {
       console.error('Erro ao salvar alterações:', err);
       setSnackbar({ open: true, severity: 'error', message: 'Falha ao salvar. Tente novamente.' });
@@ -462,15 +506,13 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
-  // atualizar flags booleanos
   const handleBoolChange = async (idOrObj, field, value) => {
     try {
       if (typeof idOrObj === 'object' && Array.isArray(idOrObj.ids)) {
         await Promise.all(idOrObj.ids.map((rid) => axios.post('/update', { id: rid, field, value })));
-        await fetchData(selectedMonth, true); // preserva expansões
+        await fetchData(selectedMonth, true);
       } else {
         await axios.post('/update', { id: idOrObj, field, value });
-        // update otimista e depois refetch preservando expansão
         setData((prev) => prev.map((r) => (r.id === idOrObj ? { ...r, [field]: value } : r)));
         await fetchData(selectedMonth, true);
       }
@@ -481,14 +523,12 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
-  // excluir (com confirmação) — fora do modal de edição (ação do ícone da lista)
   const handleDeleteRow = async (row) => {
     const many = row.ids && Array.isArray(row.ids);
     const msg = many
       ? `Deseja excluir ${row.ids.length} registro(s) deste profissional?`
       : 'Deseja excluir este registro?';
     if (!window.confirm(msg)) return;
-
     try {
       if (many) {
         await axios.post('/delete_many', { ids: row.ids });
@@ -503,7 +543,6 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
-  // exportar FOPAM
   const handleExport = async () => {
     if (!selectedMonth) return;
     try {
@@ -527,7 +566,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
-  // --- Perfil: handlers ---
+  // --- Perfil
   const handleOpenProfile = () => setProfileOpen(true);
   const handleCloseProfile = () => {
     setProfileOpen(false);
@@ -535,20 +574,17 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     setAvatarPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
-
   const onPickAvatar = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setAvatarFile(file);
     setAvatarPreview(URL.createObjectURL(file));
   };
-
   const clearAvatarSelection = () => {
     setAvatarFile(null);
     setAvatarPreview(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
-
   const handleSaveProfile = async () => {
     try {
       setSavingProfile(true);
@@ -575,24 +611,21 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
-  // --- WhatsApp handlers ---
+  // --- WhatsApp
   const handleOpenWaDialog = (row) => {
     setWaDialogRow(row);
-    // limpa campos ao abrir
     setWaStart('');
     setWaEnd('');
     setWaTipoData('servico');
     setWaPhone('');
     setWaDialogOpen(true);
   };
-
   const handleSendWhatsApp = async () => {
     if (!waDialogRow) return;
     setWaSending(true);
     try {
       const payload = {
         profissional: waDialogRow.profissional,
-        // só envia se o usuário preencheu
         ...(waPhone ? { phone: waPhone.replace(/\D/g, '') } : {}),
         ...(waStart ? { start: waStart } : {}),
         ...(waEnd ? { end: waEnd } : {}),
@@ -609,16 +642,216 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
     }
   };
 
+  const fetchProjetos = async () => {
+    try {
+      const r = await axios.get('/projetos');
+      setProjetosOptions(r?.data || []);
+    } catch (e) {
+      console.error('Erro ao listar projetos:', e);
+    }
+  };
+
+  const handleOpenMassDialog = async () => {
+    await fetchProjetos();
+    setProjetosSelecionados([]);
+    const t = new Date().toISOString().slice(0,10);
+    setMassStart(t);
+    setMassEnd(t);
+    setMassDialogOpen(true);
+  };
+
+  const handleMassSend = async () => {
+    if (!selectedMonth) {
+      setSnackbar({ open: true, severity: 'warning', message: 'Selecione um mês antes.' });
+      return;
+    }
+    if (!massStart || !massEnd) {
+      setSnackbar({ open: true, severity: 'warning', message: 'Informe início e fim do período.' });
+      return;
+    }
+    const targetProjects = (projetosSelecionados.length ? projetosSelecionados : projetosOptions) || [];
+
+    setMassSending(true);
+    try {
+      const uniqueSet = new Set();
+      for (const proj of targetProjects) {
+        const campoIni = massTipoData === 'pagamento' ? 'data_pagamento_from' : 'data_servico_from';
+        const campoFim = massTipoData === 'pagamento' ? 'data_pagamento_to'   : 'data_servico_to';
+        const params = {
+          mes: selectedMonth,
+          projeto: proj,
+          [campoIni]: massStart,
+          [campoFim]: massEnd,
+        };
+        const r = await axios.get('/data', { params });
+        const rows = r?.data || [];
+        rows.forEach((it) => {
+          const nome = (it.profissional || '').trim();
+          if (nome) uniqueSet.add(nome);
+        });
+      }
+
+      const profissionais = Array.from(uniqueSet);
+      if (!profissionais.length) {
+        setSnackbar({ open: true, severity: 'info', message: 'Nenhum profissional encontrado para os filtros.' });
+        return;
+      }
+
+      let ok = 0, fail = 0;
+      for (const nome of profissionais) {
+        try {
+          await axios.post('/whatsapp/send-confirmation', {
+            profissional: nome,
+            tipo_data: massTipoData,
+            start: massStart,
+            end: massEnd,
+          });
+          ok++;
+        } catch {
+          fail++;
+        }
+      }
+
+      setSnackbar({
+        open: true,
+        severity: fail ? 'warning' : 'success',
+        message:
+          `WhatsApp enviado: ${ok} sucesso${ok !== 1 ? 's' : ''}` +
+          (fail ? `, ${fail} falha${fail !== 1 ? 's' : ''}` : '') +
+          '.'
+      });
+
+      setMassDialogOpen(false);
+    } catch (err) {
+      console.error(err);
+      setSnackbar({ open: true, severity: 'error', message: 'Erro no envio em massa.' });
+    } finally {
+      setMassSending(false);
+    }
+  };
+
+  // ---------- ABA MÉDICOS ----------
+
+  // Debounce da busca
+  useEffect(() => {
+    const t = setTimeout(() => setMedicoQueryDebounced(medicoQuery), 400);
+    return () => clearTimeout(t);
+  }, [medicoQuery]);
+
+  // Buscar dados de médicos
+  const fetchMedicos = async () => {
+    setMedicosLoading(true);
+    try {
+      const params = {
+        page: medicosPage,
+        page_size: medicosRowsPerPage,
+      };
+      if (medicoQueryDebounced && medicoQueryDebounced.trim()) {
+        params.q = medicoQueryDebounced.trim();
+      }
+      const r = await axios.get('/medicos/all', { params });
+
+      let items = [];
+      let total = 0;
+
+      if (r?.data && Array.isArray(r.data.items)) {
+        items = r.data.items;
+        total = Number.isFinite(r.data.total) ? r.data.total : r.data.items.length;
+      } else if (Array.isArray(r?.data)) {
+        items = r.data;
+        total = r.data.length;
+      }
+
+      setMedicos(items || []);
+      setMedicosTotal(total || 0);
+    } catch (e) {
+      console.error('Erro ao listar medicos:', e);
+      setMedicos([]);
+      setMedicosTotal(0);
+    } finally {
+      setMedicosLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (painelAtivo === 'medicos') fetchMedicos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [painelAtivo, medicosPage, medicosRowsPerPage, medicoQueryDebounced]);
+
+  const handleChangeMedicosPage = (_e, newPage) => {
+    setMedicosPage(newPage);
+  };
+  const handleChangeMedicosRowsPerPage = (e) => {
+    setMedicosRowsPerPage(parseInt(e.target.value, 10));
+    setMedicosPage(0);
+  };
+
+  const syncMedicos = async () => {
+    try {
+      await axios.post('/medicos/sync-from-fopam');
+      setSnackbar({ open: true, severity: 'success', message: 'Sincronizado com FOPAM.' });
+      await fetchMedicos();
+    } catch (e) {
+      console.error(e);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao sincronizar.' });
+    }
+  };
+
+// handler novo
+const handleExportMedicos = async () => {
+  try {
+    const res = await axios.get('/medicos/export', { responseType: 'blob' });
+    const blob = new Blob([res.data], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'medicos.xlsx';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    console.error('Erro ao exportar médicos:', err);
+    setSnackbar({ open: true, severity: 'error', message: 'Falha ao exportar médicos.' });
+  }
+};
+
+
+  const saveMedicoContato = async (idx) => {
+    const row = medicos[idx];
+    try {
+      await axios.post('/medicos/upsert', {
+        profissional: row.profissional,
+        telefone: row.telefone,
+        email: row.email,
+        cpf: row.cpf,
+        vinculo: row.vinculo,
+        cnpj: row.cnpj,
+        cidade: row.cidade,
+        estado: row.estado,
+        status: row.status,
+      });
+      setSnackbar({ open: true, severity: 'success', message: 'Contato salvo.' });
+      // opcional recarregar a página atual
+      // await fetchMedicos();
+    } catch (e) {
+      console.error(e);
+      setSnackbar({ open: true, severity: 'error', message: 'Falha ao salvar contato.' });
+    }
+  };
+
   const fallbackInitial = (displayName || ' ').trim().charAt(0).toUpperCase();
 
   // ===== Drawer retrátil (temporário) =====
   const handleNavigate = (nextPane) => {
     setPainelAtivo(nextPane);
-    onNavigate?.(); // fecha o drawer
+    onNavigate?.();
   };
   const handlePickMonth = (m) => {
     setSelectedMonth(m);
-    onNavigate?.(); // fecha o drawer
+    onNavigate?.();
   };
 
   return (
@@ -722,10 +955,16 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
           <ListItemButton selected={painelAtivo === 'cassi'} onClick={() => handleNavigate('cassi')}>
             <ListItemText primary="Acompanhamento CASSI" />
           </ListItemButton>
+
+          <ListItemButton selected={painelAtivo === 'medicos'} onClick={() => { setPainelAtivo('medicos'); onNavigate?.(); }}>
+            <PeopleIcon fontSize="small" style={{ marginRight: 8 }} />
+            <ListItemText primary="Médicos" />
+          </ListItemButton>
+
         </List>
       </Drawer>
 
-      {/* Conteúdo principal não precisa de margem quando o Drawer é temporário */}
+      {/* Conteúdo principal */}
       <Box sx={{ flexGrow: 1, p: 2 }}>
         {painelAtivo === 'fopam' ? (
           <>
@@ -741,6 +980,9 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                   </Button>
                   <Button variant="outlined" onClick={handleExport} disabled={!selectedMonth}>
                     Exportar FOPAM
+                  </Button>
+                  <Button variant="outlined" startIcon={<CampaignIcon />} onClick={handleOpenMassDialog} disabled={!selectedMonth}>
+                    Validar produções
                   </Button>
                 </Box>
 
@@ -937,6 +1179,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                     fullWidth
                     disabled={savingDialog}
                   />
+
                   <TextField
                     label="Profissional"
                     value={dialogGlobal.profissional || ''}
@@ -944,6 +1187,41 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                     fullWidth
                     disabled={savingDialog}
                   />
+
+                  {/* NEW: Vincular ao cadastro de médicos (opcional) */}
+                  <Autocomplete
+                    options={medicosOptions}
+                    loading={medicosLoadingList}
+                    value={
+                      dialogGlobal.medico_id
+                        ? medicosOptions.find(o => o.id === dialogGlobal.medico_id) || null
+                        : null
+                    }
+                    onChange={(_, val) => {
+                      setDialogGlobal(prev => ({
+                        ...prev,
+                        medico_id: val?.id || null,
+                        profissional: prev.profissional || val?.label || prev.profissional,
+                      }));
+                    }}
+                    renderInput={(params) => (
+                      <TextField
+                        {...params}
+                        label="Médico (cadastro) — opcional"
+                        placeholder="Vincular ao cadastro"
+                        InputProps={{
+                          ...params.InputProps,
+                          endAdornment: (
+                            <>
+                              {medicosLoadingList ? <CircularProgress size={18} /> : null}
+                              {params.InputProps.endAdornment}
+                            </>
+                          ),
+                        }}
+                      />
+                    )}
+                  />
+
                   <TextField
                     label="Vínculo"
                     value={dialogGlobal.vinculo || ''}
@@ -1051,11 +1329,9 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                               onClick={() =>
                                 setDialogRows((rows) => {
                                   const target = rows[idx];
-                                  // se a linha existe no banco, marca para exclusão
                                   if (target?.id) {
                                     setDeletedIds((prev) => Array.from(new Set([...prev, target.id])));
                                   }
-                                  // remove visualmente do modal
                                   return rows.filter((_, i) => i !== idx);
                                 })
                               }
@@ -1202,7 +1478,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
               </DialogActions>
             </Dialog>
 
-            {/* Dialog de WhatsApp: agora com datas + tipo de data + telefone opcional */}
+            {/* Dialog de WhatsApp */}
             <Dialog open={waDialogOpen} onClose={() => (waSending ? null : setWaDialogOpen(false))} maxWidth="sm" fullWidth>
               <DialogTitle>Enviar confirmação via WhatsApp</DialogTitle>
               <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
@@ -1270,6 +1546,75 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
                 </Button>
               </DialogActions>
             </Dialog>
+            
+            {/* Dialog de validação em massa */}
+            <Dialog open={massDialogOpen} onClose={() => (massSending ? null : setMassDialogOpen(false))} maxWidth="sm" fullWidth>
+              <DialogTitle>Validar produções (envio em massa)</DialogTitle>
+              <DialogContent dividers sx={{ backgroundColor: 'background.paper' }}>
+                {massSending && (
+                  <Box sx={{ mb: 2 }}>
+                    <LinearProgress />
+                    <Typography variant="body2" sx={{ mt: 1 }}>Enviando…</Typography>
+                  </Box>
+                )}
+
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {/* período */}
+                  <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 2 }}>
+                    <TextField
+                      label="Início"
+                      type="date"
+                      value={massStart}
+                      onChange={(e) => setMassStart(e.target.value)}
+                      InputLabelProps={{ shrink: true }}
+                    />
+                    <TextField
+                      label="Fim"
+                      type="date"
+                      value={massEnd}
+                      onChange={(e) => setMassEnd(e.target.value)}
+                      InputLabelProps={{ shrink: true }}
+                    />
+                  </Box>
+
+                  <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                    <Typography variant="body2">Tipo de data:</Typography>
+                    <Select
+                      size="small"
+                      value={massTipoData}
+                      onChange={(e) => setMassTipoData(e.target.value)}
+                    >
+                      <MenuItem value="pagamento">Data de pagamento</MenuItem>
+                      <MenuItem value="servico">Data de serviço</MenuItem>
+                    </Select>
+                  </Box>
+
+                  <Autocomplete
+                    multiple
+                    options={projetosOptions}
+                    value={projetosSelecionados}
+                    onChange={(_, v) => setProjetosSelecionados(v)}
+                    renderTags={(value, getTagProps) =>
+                      value.map((option, index) => (
+                        <Chip variant="outlined" label={option} {...getTagProps({ index })} />
+                      ))
+                    }
+                    renderInput={(params) => <TextField {...params} label="Projetos (vazio = todos)" />}
+                  />
+
+                  <Alert severity="info">
+                    Serão considerados os profissionais que têm produção <b>no período selecionado</b> (de acordo com o tipo de data).<br />
+                    Se nenhum projeto for escolhido, enviaremos para <b>todos</b> os projetos do mês selecionado.
+                  </Alert>
+                </Box>
+              </DialogContent>
+              <DialogActions>
+                <Button onClick={() => setMassDialogOpen(false)} disabled={massSending}>Cancelar</Button>
+                <Button onClick={handleMassSend} variant="contained" disabled={massSending || !selectedMonth}>
+                  {massSending ? 'Enviando…' : 'Enviar'}
+                </Button>
+              </DialogActions>
+            </Dialog>
 
             {/* Dialog de Perfil */}
             <Dialog open={profileOpen} onClose={handleCloseProfile} maxWidth="sm" fullWidth>
@@ -1325,13 +1670,218 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
               </DialogActions>
             </Dialog>
           </>
-        ) : painelAtivo === 'relatorios' ? (
-          <Relatorios />
-        ) : painelAtivo === 'indicadores' ? (
-          <Indicadores />
-        ) : (
-          <AcompanhamentoCassi />
-        )}
+      ) : painelAtivo === 'relatorios' ? (
+        <Relatorios />
+      ) : painelAtivo === 'indicadores' ? (
+        <Indicadores />
+      ) : painelAtivo === 'medicos' ? (
+        <>
+          <Typography variant="h5" gutterBottom>
+            Médicos — Contatos
+          </Typography>
+
+          <Box sx={{ display: 'flex', gap: 1, mb: 2, alignItems: 'center' }}>
+            <Button variant="outlined" startIcon={<RefreshIcon />} onClick={syncMedicos}>
+              Sincronizar com FOPAM
+            </Button>
+
+            {/* NOVO: botão de exportação */}
+            <Button variant="outlined" onClick={handleExportMedicos}>
+              Exportar cadastro
+            </Button>
+
+            <TextField
+              size="small"
+              label="Pesquisar médico (servidor)"
+              value={medicoQuery}
+              onChange={(e) => {
+                setMedicoQuery(e.target.value);
+                setMedicosPage(0);
+              }}
+              placeholder="Nome, e-mail ou telefone"
+            />
+          </Box>
+
+
+          {medicosLoading ? (
+            <Box sx={{ py: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress /></Box>
+          ) : (
+            <Paper sx={{ borderRadius: 2, overflow: 'hidden' }}>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Profissional</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Telefone</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>E-mail</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>WhatsApp (normalizado)</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>CPF</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Vínculo</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>CNPJ</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Cidade</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Estado</TableCell>
+                    <TableCell sx={{ fontWeight: 'bold' }}>Status</TableCell>
+                    <TableCell align="center" sx={{ fontWeight: 'bold' }}>Ações</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {(medicos || []).map((m, idx) => (
+                    <TableRow key={m.id || m.profissional || idx}>
+                      <TableCell sx={{ minWidth: 240 }}>{m.profissional}</TableCell>
+
+                      <TableCell sx={{ minWidth: 160 }}>
+                        <TextField
+                          size="small"
+                          value={m.telefone || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], telefone: v };
+                              return cp;
+                            });
+                          }}
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ minWidth: 220 }}>
+                        <TextField
+                          size="small"
+                          type="email"
+                          value={m.email || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], email: v };
+                              return cp;
+                            });
+                          }}
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ color: 'text.secondary' }}>{m.whatsapp || '-'}</TableCell>
+
+                      <TableCell sx={{ minWidth: 140 }}>
+                        <TextField
+                          size="small"
+                          value={m.cpf || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], cpf: v };
+                              return cp;
+                            });
+                          }}
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ minWidth: 140 }}>
+                        <TextField
+                          size="small"
+                          value={m.vinculo || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], vinculo: v };
+                              return cp;
+                            });
+                          }}
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ minWidth: 140 }}>
+                        <TextField
+                          size="small"
+                          value={m.cnpj || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], cnpj: v };
+                              return cp;
+                            });
+                          }}
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ minWidth: 140 }}>
+                        <TextField
+                          size="small"
+                          value={m.cidade || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], cidade: v };
+                              return cp;
+                            });
+                          }}
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ minWidth: 100 }}>
+                        <TextField
+                          size="small"
+                          value={m.estado || ''}
+                          onChange={(e) => {
+                            const v = e.target.value.toUpperCase();
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], estado: v };
+                              return cp;
+                            });
+                          }}
+                          inputProps={{ maxLength: 2 }}
+                          placeholder="UF"
+                        />
+                      </TableCell>
+
+                      <TableCell sx={{ minWidth: 120 }}>
+                        <TextField
+                          size="small"
+                          value={m.status || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setMedicos((prev) => {
+                              const cp = [...prev];
+                              cp[idx] = { ...cp[idx], status: v };
+                              return cp;
+                            });
+                          }}
+                          placeholder="ativo/inativo"
+                        />
+                      </TableCell>
+
+                      <TableCell align="center">
+                        <Button size="small" startIcon={<SaveIcon />} onClick={() => saveMedicoContato(idx)}>
+                          Salvar
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+
+              {/* Paginação */}
+              <TablePagination
+                component="div"
+                count={medicosTotal}
+                page={medicosPage}
+                onPageChange={handleChangeMedicosPage}
+                rowsPerPage={medicosRowsPerPage}
+                onRowsPerPageChange={handleChangeMedicosRowsPerPage}
+                rowsPerPageOptions={[25, 50, 100]}
+                labelRowsPerPage="Linhas por página:"
+                labelDisplayedRows={({ from, to, count }) => `${from}–${to} de ${count !== -1 ? count : `mais de ${to}`}`}
+              />
+            </Paper>
+          )}
+        </>
+      ) : (
+        <AcompanhamentoCassi />
+      )}
       </Box>
 
       {/* Snackbar global */}
