@@ -775,7 +775,7 @@ export default function Dashboard({ userEmail, userName, navOpen, setNavOpen, on
 
   useEffect(() => {
     if (painelAtivo === 'medicos') fetchMedicos();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, [painelAtivo, medicosPage, medicosRowsPerPage, medicoQueryDebounced]);
 
   const handleChangeMedicosPage = (_e, newPage) => {
