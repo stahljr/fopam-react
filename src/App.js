@@ -9,6 +9,7 @@ import axios from 'axios';
 import Dashboard from './Dashboard';
 import AdminPanel from './AdminPanel';
 import Relatorios from './Relatorios';
+import Underwriting from './Underwriting';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 
 // URL e chave pública do seu projeto Supabase
@@ -257,11 +258,16 @@ function App() {
             />
           </Box>
           <Typography variant="h6" fontWeight="bold" sx={{ flex: 1, textAlign: 'center' }}>
-            {currentPage === 'relatorios' ? 'Relatórios Personalizados' : 'Relatório Analítico FOPAM'}
+            {currentPage === 'relatorios'
+              ? 'Relatórios Personalizados'
+              : currentPage === 'uw'
+              ? 'Gerenciamento de Exames'
+              : 'Relatório Analítico FOPAM'}
           </Typography>
           <Box sx={{ flex: 1, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
             {userRole === 'admin' && (
               <>
+                {/* Importar planilha FOPAM */}
                 <Button
                   variant="outlined"
                   startIcon={<CloudUploadIcon />}
@@ -272,6 +278,15 @@ function App() {
                 >
                   Importar planilha
                 </Button>
+                {/* Alternar Exames */}
+                <Button
+                  variant={currentPage === 'uw' ? 'contained' : 'outlined'}
+                  color="primary"
+                  onClick={() => setCurrentPage((prev) => (prev === 'uw' ? 'dashboard' : 'uw'))}
+                >
+                  {currentPage === 'uw' ? 'Voltar ao Dashboard' : 'Exames'}
+                </Button>
+                {/* Administrador de usuários */}
                 <Button
                   variant={showAdmin ? 'contained' : 'outlined'}
                   color="primary"
@@ -326,6 +341,8 @@ function App() {
       <Box flex={1} overflow="auto">
         {showAdmin && userRole === 'admin' ? (
           <AdminPanel />
+        ) : currentPage === 'uw' ? (
+          <Underwriting />
         ) : currentPage === 'dashboard' ? (
           <Dashboard
             userEmail={session.user.email}

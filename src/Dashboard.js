@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import Relatorios from './Relatorios';
 import Indicadores from './Indicadores';
+import Underwriting from './Underwriting';
 import {
   Box,
   Drawer,
@@ -961,6 +962,11 @@ const handleExportMedicos = async () => {
             <ListItemText primary="Médicos" />
           </ListItemButton>
 
+          {/* Nova aba de Underwriting / Exames */}
+          <ListItemButton selected={painelAtivo === 'uw'} onClick={() => handleNavigate('uw')}>
+            <ListItemText primary="Exames" />
+          </ListItemButton>
+
         </List>
       </Drawer>
 
@@ -1670,6 +1676,8 @@ const handleExportMedicos = async () => {
               </DialogActions>
             </Dialog>
           </>
+      ) : painelAtivo === 'uw' ? (
+        <Underwriting />
       ) : painelAtivo === 'relatorios' ? (
         <Relatorios />
       ) : painelAtivo === 'indicadores' ? (
