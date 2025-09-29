@@ -135,7 +135,7 @@ export default function Underwriting() {
   // Init BRL display whenever insured_capital changes externally
   useEffect(() => {
     setCapDisplay(toBRL(form.insured_capital));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
   const handleShowApplicantDetails = (applicantId) => {
