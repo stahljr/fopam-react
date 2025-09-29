@@ -1,5 +1,3 @@
-// src/Underwriting.js
-
 import React, { useState, useEffect } from 'react';
 import {
   Box,
@@ -24,7 +22,11 @@ import {
   DialogActions,
   Chip,
   Tooltip,
+  Grid,
+  List,
+  ListItem,
 } from '@mui/material';
+import Autocomplete from '@mui/material/Autocomplete';
 import axios from 'axios';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -34,6 +36,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SendIcon from '@mui/icons-material/Send';
 import TaskAltIcon from '@mui/icons-material/TaskAlt';
 import InfoIcon from '@mui/icons-material/Info';
+import FileDownloadIcon from '@mui/icons-material/Download';
+import CancelIcon from '@mui/icons-material/Cancel';
 
 /**
  * Underwriting management component.
@@ -47,40 +51,55 @@ export default function Underwriting() {
   // Mode for toggling between creating a new applicant and managing existing ones
   const [mode, setMode] = useState('manage');
 
-  // Format number as currency (pt-BR) without currency symbol
-  const formatCurrency = (val) => {
-    if (val === '' || val === null || val === undefined) return '';
-    const num = typeof val === 'number' ? val : parseFloat(val);
-    if (isNaN(num)) return val;
-    return new Intl.NumberFormat('pt-BR', {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(num);
+  // Currency helpers (BRL) — stable caret: display string separate from numeric value
+  const toNumberFromMasked = (s) => {
+    if (!s) return 0;
+    const onlyDigits = String(s).replace(/[^\d]/g, '');
+    // Interpret last 2 digits as cents
+    return Number(onlyDigits || '0') / 100;
   };
+  const toBRL = (n) =>
+    (Number(n) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
+  // Insurers / applicants / providers / exams registry
   const [insurers, setInsurers] = useState([]);
   const [applicants, setApplicants] = useState([]);
-  // Flattened appointment rows for display and editing
-  const [rows, setRows] = useState([]);
+  const [rows, setRows] = useState([]); // flattened appointments
   const [providers, setProviders] = useState([]);
-  // Lista de todos os tipos de exame (usada para associar a prestadores)
   const [examsList, setExamsList] = useState([]);
+
+  // Status map (include "Not Requested")
   const statusOptions = [
-    'To Schedule',
-    'Scheduled',
-    'In Progress',
-    'Completed',
-    'Results Received',
-    'Billed',
+    { value: 'To Schedule', label: 'Em Aberto' },
+    { value: 'Scheduled', label: 'Agendado' },
+    { value: 'Completed', label: 'Realizado' },
+    { value: 'Results Received', label: 'Finalizado' },
+    { value: 'Not Requested', label: 'Não Solicitado' },
   ];
+
+  // Create form (includes address/contact/home/notes)
   const [form, setForm] = useState({
     insurer_name: '',
     name: '',
     birth_date: '',
     sex: 'M',
     is_asian: false,
-    insured_capital: '',
+    insured_capital: 0, // numeric value sent to backend
+    broker: '',
+    request_date: '',
+    case_number: '',
+    estado: '',
+    cidade: '',
+    cep: '',
+    numero: '',
+    complemento: '',
+    telefone: '',
+    email: '',
+    domiciliar: false,
+    comments: '',
   });
+  const [capDisplay, setCapDisplay] = useState(''); // UI-only string for currency input
+
   const [requiredExams, setRequiredExams] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -90,11 +109,11 @@ export default function Underwriting() {
   const [filterInsurer, setFilterInsurer] = useState('');
   const [searchName, setSearchName] = useState('');
 
-  // Modal for editing an appointment (exam)
+  // Appointment edit modal
   const [modalOpen, setModalOpen] = useState(false);
   const [modalRowIndex, setModalRowIndex] = useState(null);
 
-  // Modal para criação de prestador
+  // Provider create modal
   const [providerModalOpen, setProviderModalOpen] = useState(false);
   const [newProvider, setNewProvider] = useState({
     name: '',
@@ -105,14 +124,42 @@ export default function Underwriting() {
     exam_ids: [],
   });
 
-  // Modal de detalhes do prestador
+  // Provider details modal
   const [providerDetailsOpen, setProviderDetailsOpen] = useState(false);
   const [detailsProvider, setDetailsProvider] = useState(null);
+
+  // Applicant details modal
+  const [applicantDetailsOpen, setApplicantDetailsOpen] = useState(false);
+  const [detailsApplicant, setDetailsApplicant] = useState(null);
+
+  // Init BRL display whenever insured_capital changes externally
+  useEffect(() => {
+    setCapDisplay(toBRL(form.insured_capital));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleShowApplicantDetails = (applicantId) => {
+    const applicant = applicants.find((a) => a.id === applicantId);
+    const anyRow = rows.find((r) => r.applicant_id === applicantId);
+    const insurerName = anyRow ? anyRow.insurer_name : '';
+    const exams = rows
+      .filter((r) => r.applicant_id === applicantId)
+      .map((r) => ({
+        code: r.exam_code,
+        name: r.exam_name,
+        date: r.appointment_date ? r.appointment_date.split('T')[0] : '',
+        provider: r.provider_name || '',
+        status: r.status,
+        results_received: r.results_received,
+        results_sent: r.results_sent,
+      }));
+    setDetailsApplicant({ applicant, exams, insurerName });
+    setApplicantDetailsOpen(true);
+  };
 
   const handleShowProviderDetails = (providerId) => {
     const prov = providers.find((p) => p.id === providerId);
     if (prov) {
-      // Compute a list of exam names if the provider has exam ids
       let examIds = prov.exams || prov.exam_ids;
       if (!Array.isArray(examIds)) examIds = [];
       const examNames = examIds
@@ -123,8 +170,41 @@ export default function Underwriting() {
     }
   };
 
+  // Helper: convert status value to Portuguese label
+  const getStatusLabel = (value) => {
+    const opt = statusOptions.find((o) => o.value === value);
+    if (opt) return opt.label;
+    switch (value) {
+      case 'In Progress':
+        return 'Agendado';
+      case 'Billed':
+        return 'Finalizado';
+      default:
+        return value;
+    }
+  };
+
   const handleNewProviderChange = (field, value) => {
     setNewProvider((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // Export XLSX (backend already returns .xlsx)
+  const handleExport = async () => {
+    try {
+      const res = await axios.get('/uw/applicants/export', { responseType: 'blob' });
+      const blob = new Blob([res.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'exames.xlsx');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } catch (err) {
+      console.error('Erro ao exportar casos', err);
+    }
   };
 
   const handleSaveProvider = async () => {
@@ -153,12 +233,11 @@ export default function Underwriting() {
     }
   };
 
-  // Fetch insurers and applicants on mount
+  // Fetch baseline lists
   useEffect(() => {
     loadInsurers();
     loadApplicants();
     loadProviders();
-    // carregar lista de exames para o modal de prestadores
     loadExamsList();
   }, []);
 
@@ -176,7 +255,6 @@ export default function Underwriting() {
       const res = await axios.get('/uw/applicants');
       const apps = res.data || [];
       setApplicants(apps);
-      // Flatten appointments into rows array
       const flattened = [];
       apps.forEach((app) => {
         (app.appointments || []).forEach((appt) => {
@@ -211,7 +289,6 @@ export default function Underwriting() {
     }
   };
 
-  // Carrega todos os tipos de exame definidos no backend
   const loadExamsList = async () => {
     try {
       const res = await axios.get('/uw/exams');
@@ -221,7 +298,7 @@ export default function Underwriting() {
     }
   };
 
-  // Update a single appointment row both locally and remotely
+  // Update appointment row
   const handleRowUpdate = async (rowIndex, field, value) => {
     setRows((prev) => {
       const copy = [...prev];
@@ -246,8 +323,8 @@ export default function Underwriting() {
   // Delete an applicant and reload
   const handleDeleteApplicant = async (applicantId) => {
     if (!applicantId) return;
-    const confirm = window.confirm('Tem certeza que deseja excluir este solicitante e todos os exames associados?');
-    if (!confirm) return;
+    const confirmDel = window.confirm('Tem certeza que deseja excluir este solicitante e todos os exames associados?');
+    if (!confirmDel) return;
     try {
       await axios.delete(`/uw/applicants/${applicantId}`);
       await loadApplicants();
@@ -264,8 +341,7 @@ export default function Underwriting() {
   const handleSubmit = async () => {
     setError('');
     setRequiredExams([]);
-    // Basic validation
-    if (!form.insurer_name || !form.name || !form.birth_date || !form.insured_capital) {
+    if (!form.insurer_name || !form.name || !form.birth_date) {
       setError('Preencha todos os campos obrigatórios.');
       return;
     }
@@ -277,17 +353,47 @@ export default function Underwriting() {
         birth_date: form.birth_date,
         sex: form.sex,
         is_asian: form.is_asian,
-        insured_capital: parseFloat(form.insured_capital),
+        insured_capital: Number(form.insured_capital || 0),
+        broker: form.broker || null,
+        request_date: form.request_date || null,
+        case_number: form.case_number || null,
+        // endereço/contato/domicílio/comentários
+        estado: form.estado || null,
+        cidade: form.cidade || null,
+        cep: form.cep || null,
+        numero: form.numero || null,
+        complemento: form.complemento || null,
+        telefone: form.telefone || null,
+        email: form.email || null,
+        domiciliar: !!form.domiciliar,
+        comments: form.comments || null,
       };
       const res = await axios.post('/uw/applicants', payload);
-      // Append new applicant and show required exams
       const { applicant, required_exams } = res.data || {};
       if (applicant) {
-        // Recarrega lista completa (inclui novos agendamentos)
         await loadApplicants();
         setRequiredExams(required_exams || []);
-        // Reset form
-        setForm({ insurer_name: '', name: '', birth_date: '', sex: 'M', is_asian: false, insured_capital: '' });
+        setForm({
+          insurer_name: '',
+          name: '',
+          birth_date: '',
+          sex: 'M',
+          is_asian: false,
+          insured_capital: 0,
+          broker: '',
+          request_date: '',
+          case_number: '',
+          estado: '',
+          cidade: '',
+          cep: '',
+          numero: '',
+          complemento: '',
+          telefone: '',
+          email: '',
+          domiciliar: false,
+          comments: '',
+        });
+        setCapDisplay('');
       }
     } catch (err) {
       const msg = err.response?.data?.error || err.message;
@@ -296,7 +402,7 @@ export default function Underwriting() {
     setLoading(false);
   };
 
-  // Compute filtered rows based on selected filters
+  // Filters
   const filteredRows = rows.filter((row) => {
     if (filterStatus && row.status !== filterStatus) return false;
     if (filterInsurer && row.insurer_name !== filterInsurer) return false;
@@ -304,14 +410,14 @@ export default function Underwriting() {
     return true;
   });
 
-  // Group rows by applicant for table view
+  // Group by applicant for display
   const grouped = {};
-  filteredRows.forEach((row, idx) => {
+  filteredRows.forEach((row) => {
     const aid = row.applicant_id;
     if (!grouped[aid]) {
-      grouped[aid] = { applicant_name: row.applicant_name, insurer_name: row.insurer_name, items: [] };
+      grouped[aid] = { applicant_name: row.applicant_name, insurer_name: row.insurer_name, applicant_id: aid, items: [] };
     }
-    grouped[aid].items.push({ ...row, rowIndex: rows.indexOf(row) });
+    grouped[aid].items.push(row);
   });
   const groupedList = Object.values(grouped);
 
@@ -341,82 +447,182 @@ export default function Underwriting() {
       {mode === 'add' && (
         <Box
           component="form"
-          sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center', mb: 3 }}
+          sx={{ display: 'flex', flexDirection: 'column', gap: 2, mb: 3 }}
           onSubmit={(e) => {
             e.preventDefault();
             handleSubmit();
           }}
         >
-          <Select
-            name="insurer_name"
-            value={form.insurer_name}
-            onChange={handleChange}
-            displayEmpty
-            required
-            sx={{ minWidth: 200 }}
-          >
-            <MenuItem value="" disabled>
-              Escolha a seguradora
-            </MenuItem>
-            {insurers.map((ins) => (
-              <MenuItem key={ins.id} value={ins.name}>
-                {ins.name}
-              </MenuItem>
-            ))}
-          </Select>
-          <TextField
-            name="name"
-            label="Nome"
-            value={form.name}
-            onChange={handleChange}
-            required
-          />
-          <TextField
-            name="birth_date"
-            type="date"
-            label="Data de Nascimento"
-            value={form.birth_date}
-            onChange={handleChange}
-            InputLabelProps={{ shrink: true }}
-            required
-          />
-          <Select name="sex" value={form.sex} onChange={handleChange} required>
-            <MenuItem value="M">Masculino</MenuItem>
-            <MenuItem value="F">Feminino</MenuItem>
-          </Select>
-          <FormControlLabel
-            control={
-              <Checkbox
-                name="is_asian"
-                checked={form.is_asian}
+          <Grid container spacing={2}>
+            <Grid item xs={12} md={3}>
+              <Select
+                name="insurer_name"
+                value={form.insurer_name}
                 onChange={handleChange}
+                displayEmpty
+                required
+                fullWidth
+              >
+                <MenuItem value="" disabled>
+                  Escolha a seguradora
+                </MenuItem>
+                {insurers.map((ins) => (
+                  <MenuItem key={ins.id} value={ins.name}>
+                    {ins.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                name="name"
+                label="Nome"
+                value={form.name}
+                onChange={handleChange}
+                required
+                fullWidth
               />
-            }
-            label="Asiático"
-          />
-          <TextField
-            name="insured_capital"
-            label="Capital Segurado"
-            type="text"
-            value={formatCurrency(form.insured_capital)}
-            onChange={(e) => {
-              const raw = e.target.value;
-              // remove pontos de milhar e substituir vírgula por ponto
-              const numericString = raw
-                .replace(/\./g, '')
-                .replace(/,/g, '.')
-                .replace(/[^0-9.]/g, '');
-              const num = parseFloat(numericString);
-              setForm((prev) => ({
-                ...prev,
-                insured_capital: isNaN(num) ? '' : num,
-              }));
-            }}
-            required
-          />
-          <Button variant="contained" type="submit" disabled={loading}>
-            {loading ? 'Enviando...' : 'Adicionar'}
-          </Button>
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <TextField
+                name="birth_date"
+                type="date"
+                label="Data de Nascimento"
+                value={form.birth_date}
+                onChange={handleChange}
+                InputLabelProps={{ shrink: true }}
+                required
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12} md={2}>
+              <Select name="sex" value={form.sex} onChange={handleChange} required fullWidth>
+                <MenuItem value="M">Masculino</MenuItem>
+                <MenuItem value="F">Feminino</MenuItem>
+              </Select>
+            </Grid>
+            <Grid item xs={12} md={2} sx={{ display: 'flex', alignItems: 'center' }}>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    name="is_asian"
+                    checked={form.is_asian}
+                    onChange={handleChange}
+                  />
+                }
+                label="Asiático"
+              />
+            </Grid>
+
+            <Grid item xs={12} md={3}>
+              <TextField
+                label="Capital Segurado"
+                value={capDisplay}
+                onChange={(e) => {
+                  // while typing, keep raw string but show masked currency typed (digits only)
+                  const raw = e.target.value;
+                  const numeric = toNumberFromMasked(raw);
+                  setForm((prev) => ({ ...prev, insured_capital: numeric }));
+                  // Simple mask: rebuild from numeric to keep consistency
+                  setCapDisplay(toBRL(numeric));
+                }}
+                onFocus={() => {
+                  // On focus, show digits for easier editing
+                  const cents = Math.round((Number(form.insured_capital) || 0) * 100);
+                  setCapDisplay(String(cents));
+                }}
+                onBlur={() => {
+                  // On blur, show as BRL
+                  const numeric = toNumberFromMasked(capDisplay);
+                  setForm((prev) => ({ ...prev, insured_capital: numeric }));
+                  setCapDisplay(toBRL(numeric));
+                }}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                name="broker"
+                label="Corretora"
+                value={form.broker}
+                onChange={handleChange}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                name="request_date"
+                label="Data da Solicitação"
+                type="date"
+                InputLabelProps={{ shrink: true }}
+                value={form.request_date}
+                onChange={handleChange}
+                fullWidth
+              />
+            </Grid>
+            <Grid item xs={12} md={3}>
+              <TextField
+                name="case_number"
+                label="Número do Caso"
+                value={form.case_number}
+                onChange={handleChange}
+                fullWidth
+              />
+            </Grid>
+          </Grid>
+
+          {/* Endereço do segurado / contato / domicílio / comentários */}
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle1" gutterBottom>
+              Endereço e Contato
+            </Typography>
+            <Grid container spacing={2}>
+              <Grid item xs={12} md={2}>
+                <TextField label="Estado" name="estado" value={form.estado} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <TextField label="Cidade" name="cidade" value={form.cidade} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={2}>
+                <TextField label="CEP" name="cep" value={form.cep} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={2}>
+                <TextField label="Número" name="numero" value={form.numero} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={2}>
+                <TextField label="Complemento" name="complemento" value={form.complemento} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="Telefone" name="telefone" value={form.telefone} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3}>
+                <TextField label="E-mail" name="email" value={form.email} onChange={handleChange} fullWidth />
+              </Grid>
+              <Grid item xs={12} md={3} sx={{ display: 'flex', alignItems: 'center' }}>
+                <FormControlLabel
+                  control={<Checkbox name="domiciliar" checked={form.domiciliar} onChange={handleChange} />}
+                  label="Exames em domicílio"
+                />
+              </Grid>
+              <Grid item xs={12}>
+                <TextField
+                  label="Comentários"
+                  name="comments"
+                  value={form.comments}
+                  onChange={handleChange}
+                  multiline
+                  minRows={2}
+                  fullWidth
+                />
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Box sx={{ display: 'flex', gap: 1, mt: 2 }}>
+            <Button variant="contained" type="submit" disabled={loading}>
+              {loading ? 'Enviando...' : 'Adicionar'}
+            </Button>
+          </Box>
         </Box>
       )}
 
@@ -425,6 +631,7 @@ export default function Underwriting() {
           {error}
         </Alert>
       )}
+
       {mode === 'add' && requiredExams.length > 0 && (
         <Box sx={{ mb: 3 }}>
           <Typography variant="subtitle1">Exames exigidos para o último solicitante:</Typography>
@@ -435,9 +642,10 @@ export default function Underwriting() {
           </ul>
         </Box>
       )}
+
       {mode === 'manage' && (
         <>
-          {/* Filtros */}
+          {/* Filtros e exportação */}
           <Box sx={{ mb: 2, display: 'flex', flexWrap: 'wrap', gap: 2, alignItems: 'center' }}>
             <Select
               value={filterInsurer}
@@ -464,8 +672,8 @@ export default function Underwriting() {
                 <em>Todos os status</em>
               </MenuItem>
               {statusOptions.map((opt) => (
-                <MenuItem key={opt} value={opt}>
-                  {opt}
+                <MenuItem key={opt.value} value={opt.value}>
+                  {opt.label}
                 </MenuItem>
               ))}
             </Select>
@@ -474,7 +682,15 @@ export default function Underwriting() {
               value={searchName}
               onChange={(e) => setSearchName(e.target.value)}
             />
+            <Button
+              variant="outlined"
+              startIcon={<FileDownloadIcon />}
+              onClick={handleExport}
+            >
+              Exportar XLSX
+            </Button>
           </Box>
+
           {/* Tabela de exames por solicitante */}
           <Paper sx={{ width: '100%', overflowX: 'auto' }}>
             <Table size="small">
@@ -487,15 +703,22 @@ export default function Underwriting() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {groupedList.map((group, idx) => (
-                  <TableRow key={idx}>
-                    <TableCell>{group.applicant_name}</TableCell>
+                {groupedList.map((group) => (
+                  <TableRow key={group.applicant_id}>
+                    <TableCell>
+                      <Button
+                        variant="text"
+                        size="small"
+                        onClick={() => handleShowApplicantDetails(group.applicant_id)}
+                      >
+                        {group.applicant_name}
+                      </Button>
+                    </TableCell>
                     <TableCell>{group.insurer_name}</TableCell>
                     <TableCell>
                       {/* Render exams as chips with status icons and tooltips */}
                       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                        {group.items.map((it) => {
-                          // Determine icon, color and tooltip based on status, dates and results
+                        {group.items.map((it, idx) => {
                           let IconComp = ErrorOutlineIcon;
                           let chipColor = 'error';
                           let tooltip = 'A agendar';
@@ -509,10 +732,14 @@ export default function Underwriting() {
                             IconComp = TaskAltIcon;
                             chipColor = 'secondary';
                             tooltip = 'Resultados recebidos';
-                          } else if (it.status === 'Completed') {
+                          } else if (it.status === 'Not Requested') {
+                            IconComp = CancelIcon;
+                            chipColor = 'default';
+                            tooltip = 'Não solicitado';
+                          } else if (['Completed', 'Results Received', 'Billed'].includes(it.status)) {
                             IconComp = CheckCircleIcon;
                             chipColor = 'success';
-                            tooltip = 'Exame realizado';
+                            tooltip = 'Exame concluído';
                           } else if (apptDate) {
                             if (apptDate < today) {
                               IconComp = EventBusyIcon;
@@ -526,14 +753,15 @@ export default function Underwriting() {
                           }
                           const label = it.exam_code ? `${it.exam_code} – ${it.exam_name}` : it.exam_name;
                           return (
-                            <Tooltip key={it.appointment_id} title={tooltip} arrow>
+                            <Tooltip key={`${it.appointment_id}-${idx}`} title={tooltip} arrow>
                               <Chip
                                 icon={<IconComp />}
                                 label={label}
                                 color={chipColor}
                                 size="small"
                                 onClick={() => {
-                                  setModalRowIndex(it.rowIndex);
+                                  const rowIndex = rows.findIndex((r) => r.appointment_id === it.appointment_id);
+                                  setModalRowIndex(rowIndex);
                                   setModalOpen(true);
                                 }}
                                 sx={{ cursor: 'pointer' }}
@@ -544,10 +772,9 @@ export default function Underwriting() {
                       </Box>
                     </TableCell>
                     <TableCell>
-                      {/* Excluir apenas uma vez por solicitante */}
                       <IconButton
                         size="small"
-                        onClick={() => handleDeleteApplicant(group.items[0].applicant_id)}
+                        onClick={() => handleDeleteApplicant(group.applicant_id)}
                         title="Excluir solicitante e seus exames"
                       >
                         <DeleteIcon fontSize="inherit" />
@@ -570,81 +797,40 @@ export default function Underwriting() {
                     : rows[modalRowIndex].exam_name}
                 </Typography>
 
-                {/* Exibe subexames (descrição detalhada) se houver mapeamento */}
+                {/* Subexames / agrupamentos simples */}
                 {(() => {
                   const descMap = {
-                    'Perfil de Sangue (BCP)': [
-                      'Hemograma Completo',
-                      'Anti-HIV',
-                      'Glicemia em Jejum',
-                      'Hemoglobina Glicada',
-                      'Ureia',
-                      'Creatinina',
-                      'Fosfatase Alcalina',
-                      'Bilirrubina Total e Frações',
-                      'TGO',
-                      'TGP',
-                      'GGT',
-                      'Proteínas Totais e Frações',
-                      'Albumina',
-                      'Triglicérides',
-                      'Colesterol Total',
-                      'Colesterol HDL',
-                      'Colesterol LDL',
-                    ],
-                    'Hemograma': [
-                      'Hemoglobina',
-                      'Hematócrito',
-                      'Hemácias',
-                      'Leucócitos',
-                      'Plaquetas',
-                    ],
-                    'Perfil Lipídico': [
-                      'Colesterol Total',
-                      'Colesterol HDL',
-                      'Colesterol LDL',
-                      'Triglicérides',
-                    ],
-                    'Exame Clínico': [
-                      'Avaliação clínica completa pelo médico',
-                    ],
-                    'Urinálise': [
-                      'Urina Tipo I',
-                    ],
-                    'ECG': [
-                      'Eletrocardiograma de 12 derivações em repouso',
-                    ],
-                    'Teste Ergométrico': [
-                      'Teste de esforço em esteira ou bicicleta',
-                    ],
-                    'Radiografia de Tórax': [
-                      'Raio-X de Tórax (PA e Perfil)',
-                    ],
-                    'Análise Financeira Auditada': [
-                      'Relatório financeiro auditado por contador',
-                    ],
-                    'Questionário Financeiro': [
-                      'Questionário com dados financeiros do proponente',
-                    ],
-                    'Relatório de Inspeção (com Entrevista)': [
-                      'Entrevista com investigador',
-                    ],
-                    'Prova de Patrimônio': [
-                      'Documentos de comprovação de bens e ativos',
-                    ],
-                    'Marcadores de Hepatite B e C': [
-                      'Hepatite B (HBsAg, Anti-HBs)',
-                      'Hepatite C (Anti-HCV)',
-                    ],
-                    'APS Completa': [
-                      'Histórico clínico completo dos últimos 3 anos',
-                    ],
-                    'Declaração Financeira': [
-                      'Formulário de Declaração Financeira',
-                    ],
-                    'Carta do Consultor': [
-                      'Carta do consultor justificando o seguro',
-                    ],
+                    'Perfil de Sangue (BCP)': {
+                      Hemograma: ['Hemograma Completo'],
+                      'Perfil Lipídico': ['Colesterol Total', 'Colesterol HDL', 'Colesterol LDL', 'Triglicérides'],
+                      Bioquímica: [
+                        'Anti-HIV',
+                        'Glicemia em Jejum',
+                        'Hemoglobina Glicada',
+                        'Ureia',
+                        'Creatinina',
+                        'Fosfatase Alcalina',
+                        'Bilirrubina Total e Frações',
+                        'TGO',
+                        'TGP',
+                        'GGT',
+                        'Proteínas Totais e Frações',
+                        'Albumina',
+                      ],
+                    },
+                    Hemograma: ['Hemoglobina', 'Hematócrito', 'Hemácias', 'Leucócitos', 'Plaquetas'],
+                    'Perfil Lipídico': ['Colesterol Total', 'Colesterol HDL', 'Colesterol LDL', 'Triglicérides'],
+                    'Exame Clínico': ['Avaliação clínica completa pelo médico'],
+                    Urinálise: ['Urina Tipo I'],
+                    ECG: ['Eletrocardiograma de 12 derivações em repouso'],
+                    'Teste Ergométrico': ['Teste de esforço em esteira ou bicicleta'],
+                    'Radiografia de Tórax': ['Raio-X de Tórax (PA e Perfil)'],
+                    'Análise Financeira Auditada': ['Relatório financeiro auditado por contador'],
+                    'Questionário Financeiro': ['Questionário com dados financeiros do proponente'],
+                    'Relatório de Inspeção (com Entrevista)': ['Entrevista com investigador'],
+                    'Prova de Patrimônio': ['Documentos de comprovação de bens e ativos'],
+                    'Marcadores de Hepatite B e C': ['HBsAg, Anti-HBs, Anti-HCV'],
+                    'APS Completa': ['Histórico clínico completo dos últimos 3 anos'],
                   };
                   const examName = rows[modalRowIndex].exam_name;
                   const desc = descMap[examName];
@@ -654,14 +840,30 @@ export default function Underwriting() {
                       <Typography variant="caption" color="textSecondary">
                         Subexames:
                       </Typography>
-                      <ul style={{ marginTop: 4, marginBottom: 8 }}>
-                        {desc.map((d, i) => (
-                          <li key={i} style={{ fontSize: '0.8rem' }}>{d}</li>
-                        ))}
-                      </ul>
+                      {Array.isArray(desc) ? (
+                        <ul style={{ marginTop: 4, marginBottom: 8 }}>
+                          {desc.map((d, i) => (
+                            <li key={i} style={{ fontSize: '0.8rem' }}>{d}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        Object.keys(desc).map((cat) => (
+                          <Box key={cat} sx={{ mb: 1 }}>
+                            <Typography variant="body2" fontWeight="bold" sx={{ mt: 1 }}>
+                              {cat}
+                            </Typography>
+                            <ul style={{ marginTop: 2, marginBottom: 4 }}>
+                              {desc[cat].map((d, i) => (
+                                <li key={i} style={{ fontSize: '0.8rem' }}>{d}</li>
+                              ))}
+                            </ul>
+                          </Box>
+                        ))
+                      )}
                     </Box>
                   );
                 })()}
+
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 1 }}>
                   <TextField
                     label="Data do exame"
@@ -670,67 +872,68 @@ export default function Underwriting() {
                     value={rows[modalRowIndex].appointment_date || ''}
                     onChange={(e) => handleRowUpdate(modalRowIndex, 'appointment_date', e.target.value)}
                   />
-                  {
-                    /* Seleção de prestador com opção de adicionar novo */
-                  }
-                  <Select
-                    value={rows[modalRowIndex].provider_id || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === '__new__') {
-                        setProviderModalOpen(true);
-                        return;
-                      }
-                      handleRowUpdate(modalRowIndex, 'provider_id', val);
-                    }}
-                    displayEmpty
-                    renderValue={(val) => {
-                      if (!val) return <em>Selecione um prestador</em>;
-                      const prov = providers.find((p) => p.id === val);
-                      return prov ? `${prov.name}` : val;
-                    }}
-                  >
-                    <MenuItem value="">
-                      <em>Selecione um prestador</em>
-                    </MenuItem>
-                    {/* opção para criar novo prestador */}
-                    <MenuItem value="__new__" sx={{ fontStyle: 'italic', color: 'primary.main' }}>
-                      + Adicionar novo prestador
-                    </MenuItem>
-                    {providers.map((p) => (
-                      <MenuItem key={p.id} value={p.id}>
-                        <Box>
-                          <Typography variant="body2" fontWeight="bold">
-                            {p.name}
-                          </Typography>
-                          <Typography variant="caption" display="block">
-                            {p.phone || ''}
-                          </Typography>
-                          <Typography variant="caption" display="block">
-                            {p.email || ''}
-                          </Typography>
-                        </Box>
-                      </MenuItem>
-                    ))}
-                  </Select>
-                  {/* Botão para ver detalhes do prestador selecionado */}
-                  {rows[modalRowIndex].provider_id && (
-                    <IconButton
-                      size="small"
-                      onClick={() => handleShowProviderDetails(rows[modalRowIndex].provider_id)}
-                      sx={{ ml: 1 }}
+                  {/* Seleção de prestador com opção de adicionar novo */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Select
+                      value={rows[modalRowIndex].provider_id || ''}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '__new__') {
+                          setProviderModalOpen(true);
+                          return;
+                        }
+                        handleRowUpdate(modalRowIndex, 'provider_id', val);
+                      }}
+                      displayEmpty
+                      renderValue={(val) => {
+                        if (!val) return <em>Selecione um prestador</em>;
+                        const prov = providers.find((p) => p.id === val);
+                        return prov ? `${prov.name}` : val;
+                      }}
+                      fullWidth
                     >
-                      <InfoIcon fontSize="small" />
-                    </IconButton>
-                  )}
+                      <MenuItem value="">
+                        <em>Selecione um prestador</em>
+                      </MenuItem>
+                      <MenuItem value="__new__" sx={{ fontStyle: 'italic', color: 'primary.main' }}>
+                        + Adicionar novo prestador
+                      </MenuItem>
+                      {providers.map((p) => (
+                        <MenuItem key={p.id} value={p.id}>
+                          <Box>
+                            <Typography variant="body2" fontWeight="bold">
+                              {p.name}
+                            </Typography>
+                            <Typography variant="caption" display="block">
+                              {p.phone || ''}
+                            </Typography>
+                            <Typography variant="caption" display="block">
+                              {p.email || ''}
+                            </Typography>
+                          </Box>
+                        </MenuItem>
+                      ))}
+                    </Select>
+
+                    {rows[modalRowIndex].provider_id && (
+                      <IconButton
+                        size="small"
+                        onClick={() => handleShowProviderDetails(rows[modalRowIndex].provider_id)}
+                        sx={{ ml: 1 }}
+                      >
+                        <InfoIcon fontSize="small" />
+                      </IconButton>
+                    )}
+                  </Box>
+
                   <Select
                     label="Status"
                     value={rows[modalRowIndex].status || ''}
                     onChange={(e) => handleRowUpdate(modalRowIndex, 'status', e.target.value)}
                   >
                     {statusOptions.map((opt) => (
-                      <MenuItem key={opt} value={opt}>
-                        {opt}
+                      <MenuItem key={opt.value} value={opt.value}>
+                        {opt.label}
                       </MenuItem>
                     ))}
                   </Select>
@@ -792,25 +995,33 @@ export default function Underwriting() {
                   value={newProvider.address}
                   onChange={(e) => handleNewProviderChange('address', e.target.value)}
                 />
-                <Select
+                <Autocomplete
                   multiple
-                  value={newProvider.exam_ids}
-                  onChange={(e) => handleNewProviderChange('exam_ids', e.target.value)}
-                  renderValue={(selected) => {
-                    const names = selected
-                      .map((id) => examsList.find((ex) => ex.id === id)?.name)
-                      .filter(Boolean);
-                    return names.join(', ');
+                  options={examsList}
+                  getOptionLabel={(option) => option.name}
+                  value={examsList.filter((ex) => newProvider.exam_ids.includes(ex.id))}
+                  onChange={(_, selected) => {
+                    const ids = selected.map((opt) => opt.id);
+                    handleNewProviderChange('exam_ids', ids);
                   }}
-                  displayEmpty
-                >
-                  {examsList.map((ex) => (
-                    <MenuItem key={ex.id} value={ex.id}>
-                      <Checkbox checked={newProvider.exam_ids.includes(ex.id)} />
-                      <Typography variant="body2">{ex.name}</Typography>
-                    </MenuItem>
-                  ))}
-                </Select>
+                  renderTags={(value, getTagProps) =>
+                    value.map((option, index) => (
+                      <Chip
+                        size="small"
+                        label={option.name}
+                        {...getTagProps({ index })}
+                      />
+                    ))
+                  }
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Exames realizados"
+                      placeholder="Selecione os exames"
+                    />
+                  )}
+                  filterSelectedOptions
+                />
               </Box>
             </DialogContent>
             <DialogActions>
@@ -846,7 +1057,6 @@ export default function Underwriting() {
                     </a>
                   </Typography>
                 )}
-                {/* Lista de exames que o prestador realiza */}
                 <Typography variant="caption" color="textSecondary">Exames realizados:</Typography>
                 <ul style={{ marginTop: 4 }}>
                   {(() => {
@@ -861,6 +1071,72 @@ export default function Underwriting() {
             )}
             <DialogActions>
               <Button onClick={() => setProviderDetailsOpen(false)}>Fechar</Button>
+            </DialogActions>
+          </Dialog>
+
+          {/* Modal de detalhes do solicitante */}
+          <Dialog open={applicantDetailsOpen} onClose={() => setApplicantDetailsOpen(false)} maxWidth="md" fullWidth>
+            <DialogTitle>Detalhes do Solicitante</DialogTitle>
+            {detailsApplicant && (
+              <DialogContent dividers>
+                <Typography variant="h6" gutterBottom>
+                  {detailsApplicant.applicant?.name}
+                </Typography>
+
+                <Grid container spacing={2}>
+                  <Grid item xs={12} md={6}>
+                    <List dense>
+                      <ListItem><b>Corretora:</b>&nbsp;{detailsApplicant.applicant?.broker || '—'}</ListItem>
+                      <ListItem><b>Seguradora:</b>&nbsp;{detailsApplicant.insurerName || '—'}</ListItem>
+                      <ListItem><b>Capital:</b>&nbsp;{toBRL(detailsApplicant.applicant?.insured_capital)}</ListItem>
+                      <ListItem><b>Solicitação:</b>&nbsp;{detailsApplicant.applicant?.request_date || '—'}</ListItem>
+                      <ListItem><b>Nº do Caso:</b>&nbsp;{detailsApplicant.applicant?.case_number || '—'}</ListItem>
+                    </List>
+                  </Grid>
+                  <Grid item xs={12} md={6}>
+                    <List dense>
+                      <ListItem><b>Endereço:</b>&nbsp;{[detailsApplicant.applicant?.numero, detailsApplicant.applicant?.complemento].filter(Boolean).join(', ') || '—'}</ListItem>
+                      <ListItem><b>Cidade/UF:</b>&nbsp;{[detailsApplicant.applicant?.cidade, detailsApplicant.applicant?.estado].filter(Boolean).join(' / ') || '—'}</ListItem>
+                      <ListItem><b>CEP:</b>&nbsp;{detailsApplicant.applicant?.cep || '—'}</ListItem>
+                      <ListItem><b>Telefone:</b>&nbsp;{detailsApplicant.applicant?.telefone || '—'}</ListItem>
+                      <ListItem><b>E-mail:</b>&nbsp;{detailsApplicant.applicant?.email || '—'}</ListItem>
+                      <ListItem><b>Domiciliar:</b>&nbsp;{detailsApplicant.applicant?.domiciliar ? 'Sim' : 'Não'}</ListItem>
+                      <ListItem><b>Comentários:</b>&nbsp;{detailsApplicant.applicant?.comments || '—'}</ListItem>
+                    </List>
+                  </Grid>
+                </Grid>
+
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="subtitle1">Exames</Typography>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Código</TableCell>
+                        <TableCell>Exame</TableCell>
+                        <TableCell>Data</TableCell>
+                        <TableCell>Prestador</TableCell>
+                        <TableCell>Status</TableCell>
+                        <TableCell>Resultados</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {detailsApplicant.exams.map((ex, idx) => (
+                        <TableRow key={idx}>
+                          <TableCell>{ex.code || '—'}</TableCell>
+                          <TableCell>{ex.name}</TableCell>
+                          <TableCell>{ex.date || '—'}</TableCell>
+                          <TableCell>{ex.provider || '—'}</TableCell>
+                          <TableCell>{getStatusLabel(ex.status)}</TableCell>
+                          <TableCell>{ex.results_sent ? 'Enviado' : ex.results_received ? 'Recebido' : '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </Box>
+              </DialogContent>
+            )}
+            <DialogActions>
+              <Button onClick={() => setApplicantDetailsOpen(false)}>Fechar</Button>
             </DialogActions>
           </Dialog>
         </>

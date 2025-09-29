@@ -60,6 +60,7 @@ const drawerWidth = 260;
 
 // Meses do menu lateral
 const monthsList = [
+  { value: '2025-10', label: 'Outubro' },
   { value: '2025-09', label: 'Setembro'},
   { value: '2025-08', label: 'Agosto' },
   { value: '2025-07', label: 'Julho' },
