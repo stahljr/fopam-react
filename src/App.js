@@ -32,6 +32,7 @@ function App() {
   const [userRole, setUserRole] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [currentPage, setCurrentPage] = useState('dashboard');
+  const isStandaloneMap = window.location.pathname.startsWith('/mapa');
 
   // Drawer retrátil: controle global aqui
   const [navOpen, setNavOpen] = useState(false);
@@ -44,15 +45,17 @@ function App() {
   const [uploadMsg, setUploadMsg] = useState({ type: '', text: '' });
 
   useEffect(() => {
+    if (isStandaloneMap) return;
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
         setSession(data.session);
         axios.defaults.headers.common.Authorization = 'Bearer ' + data.session.access_token;
       }
     });
-  }, []);
+  }, [isStandaloneMap]);
 
   useEffect(() => {
+    if (isStandaloneMap) return;
     if (!session) return;
     axios
       .get('/user_info', {
@@ -234,6 +237,26 @@ function App() {
             </Button>
           </DialogActions>
         </Dialog>
+      </Box>
+    );
+  }
+
+  if (isStandaloneMap) {
+    const apiBase =
+      process.env.REACT_APP_API_URL ||
+      (window.location.hostname === 'localhost'
+        ? 'http://localhost:5000'
+        : window.location.origin);
+    const normalizedApiBase = apiBase.replace(/\/$/, '');
+    const mapUrl = `${normalizedApiBase}/mapa/rede`;
+    return (
+      <Box display="flex" width="100vw" height="100vh">
+        <iframe
+          title="Mapa de Rede FOPAM"
+          src={mapUrl}
+          style={{ border: 'none', flex: 1 }}
+          allowFullScreen
+        />
       </Box>
     );
   }
